@@ -46,7 +46,7 @@ final nonisolated class DiagnosticLogger: @unchecked Sendable {
         return home
             .appendingPathComponent("Library", isDirectory: true)
             .appendingPathComponent("Logs", isDirectory: true)
-            .appendingPathComponent("Thaw", isDirectory: true)
+            .appendingPathComponent(SharedConstants.storageDirectoryName, isDirectory: true)
     }
 
     /// Returns whether any log files exist in the log directory.

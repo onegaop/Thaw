@@ -31,7 +31,8 @@ nonisolated enum ThawFocusModeStore {
         FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first?
-            .appendingPathComponent("Thaw/Profiles/profiles.json")
+            .appendingPathComponent(SharedConstants.storageDirectoryName, isDirectory: true)
+            .appendingPathComponent("Profiles/profiles.json")
     }
 
     /// Names by profile id, with the manifest's modification date at the time

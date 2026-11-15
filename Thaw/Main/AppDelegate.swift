@@ -12,6 +12,7 @@ import SwiftUI
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let appState = AppState()
+    private var isBlockedByOriginalThaw = false
     private var isPreparingForTermination = false
     private var hasRepliedToTerminationRequest = false
     private var terminationAttemptID = UUID()
@@ -38,6 +39,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         #endif
 
+        // The compatibility build must not compete with the installed upstream app.
+        isBlockedByOriginalThaw = NSRunningApplication.runningApplications(
+            withBundleIdentifier: "com.stonerl.Thaw"
+        ).contains { !$0.isTerminated }
+        if isBlockedByOriginalThaw {
+            let alert = NSAlert()
+            alert.messageText = "Quit the original Thaw before using Thaw Compat 26"
+            alert.informativeText = "The original app and its settings are unchanged. Quit it yourself, then reopen this compatibility build."
+            alert.addButton(withTitle: "Quit Thaw Compat 26")
+            alert.runModal()
+            NSApp.terminate(nil)
+            return
+        }
+
         // Bound AX messaging before any element exists, or a stalled app blocks
         // us for the six-second default (#767). Override with:
         //   defaults write com.stonerl.Thaw axMessagingTimeout -float <seconds>
@@ -62,6 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_: Notification) {
+        guard !isBlockedByOriginalThaw else { return }
         // Hide the main menu's items to add additional space to the
         // menu bar when we are the focused app.
         for item in NSApp.mainMenu?.items ?? [] {
@@ -207,7 +223,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard
             let urlString = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
             let url = URL(string: urlString),
-            url.scheme?.lowercased() == "thaw"
+            url.scheme?.lowercased() == Constants.urlScheme
         else { return }
 
         handleURL(url, sender: SettingsURISender.identify(from: event))
@@ -225,6 +241,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Settings URLs (requires whitelist authorization): thaw://set?key=X&value=Y
     /// sets a boolean setting and thaw://toggle?key=X toggles one.
     private func handleURL(_ url: URL, sender: SettingsURISender? = nil) {
+        guard url.scheme?.lowercased() == Constants.urlScheme else { return }
         let request = SettingsURIParser.parse(url)
 
         switch request.route {

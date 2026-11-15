@@ -30,6 +30,11 @@ nonisolated enum RehideStrategy: Int, CaseIterable, Identifiable {
         }
     }
 
+    /// A delayed hide must still match the user's current choice after every suspension.
+    func allowsPendingRehide(autoRehide: Bool, taskCancelled: Bool, scheduledStrategy: Self) -> Bool {
+        autoRehide && !taskCancelled && self == scheduledStrategy
+    }
+
     /// Parses a RehideStrategy from a string value.
     /// Supports exact case names: "smart", "timed", "focusedApp"
     /// Or raw integer values: "0", "1", "2"

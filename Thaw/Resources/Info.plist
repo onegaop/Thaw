@@ -2,14 +2,20 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CFBundleDisplayName</key>
+	<string>Thaw Compat 26</string>
+	<key>SUEnableAutomaticChecks</key>
+	<false/>
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>com.stonerl.Thaw</string>
+			<string>com.tony.thaw.compat26</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>thaw</string>
+				<string>thaw-compat26</string>
 			</array>
 		</dict>
 	</array>
@@ -19,10 +25,6 @@
 	<string>Thaw reads whether a Focus is active so menu bar item triggers can respond to Focus changes.</string>
 	<key>NSLocationUsageDescription</key>
 	<string>Thaw uses your location while its settings are open to identify the current Wi-Fi network and configure location-based menu bar item triggers.</string>
-	<key>SUFeedURL</key>
-	<string>https://thaw-app.github.io/updates/appcast.xml</string>
-	<key>SUPublicEDKey</key>
-	<string>fQ2kWqCLfAPAxQX1rp8gVNoG9hlAV/Gmm7kMBbxFe+A=</string>
 	<key>ThawDonateURL</key>
 	<string>https://github.com/sponsors/stonerl</string>
 	<key>ThawMenuBarItemSpacingExecutableURI</key>

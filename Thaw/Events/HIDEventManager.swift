@@ -1022,6 +1022,11 @@ extension HIDEventManager {
             // Give the window under the mouse a chance to focus. A cancelled
             // sleep aborts the check instead of running it early.
             guard await (try? Task.sleep(for: .milliseconds(250))) != nil else { return }
+            guard appState.settings.general.rehideStrategy.allowsPendingRehide(
+                autoRehide: appState.settings.general.autoRehide,
+                taskCancelled: Task.isCancelled,
+                scheduledStrategy: .smart
+            ) else { return }
 
             // Don't bother checking the window if the click caused
             // a space change.
@@ -1063,6 +1068,12 @@ extension HIDEventManager {
             if await appState.itemManager.isAnyMenuBarItemMenuOpen() {
                 return
             }
+
+            guard appState.settings.general.rehideStrategy.allowsPendingRehide(
+                autoRehide: appState.settings.general.autoRehide,
+                taskCancelled: Task.isCancelled,
+                scheduledStrategy: .smart
+            ) else { return }
 
             for section in appState.menuBarManager.sections {
                 section.hide()

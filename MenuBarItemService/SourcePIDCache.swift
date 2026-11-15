@@ -495,7 +495,7 @@ actor SourcePIDCache {
         }
 
         let ccBundleID = "com.apple.controlcenter"
-        let thawBundleID = "com.stonerl.Thaw"
+        let thawBundleID = "com.tony.thaw.compat26"
         var appsChecked = 0
         var appsWithBar = 0
         var appsSkipped = 0

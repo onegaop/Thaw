@@ -15,6 +15,28 @@ import SwiftUI
 @main
 enum ThawMain {
     static func main() {
+        if CommandLine.arguments.contains("--compatibility-self-test") {
+            let policyPasses = RehideStrategy.allCases.allSatisfy { current in
+                RehideStrategy.allCases.allSatisfy { scheduled in
+                    [false, true].allSatisfy { enabled in
+                        [false, true].allSatisfy { cancelled in
+                            current.allowsPendingRehide(
+                                autoRehide: enabled,
+                                taskCancelled: cancelled,
+                                scheduledStrategy: scheduled
+                            ) == (enabled && !cancelled && current == scheduled)
+                        }
+                    }
+                }
+            }
+            let identityPasses = Bundle.main.bundleIdentifier == "com.tony.thaw.compat26"
+            guard policyPasses, identityPasses else {
+                print("FAIL: compatibility identity or pending-hide policy")
+                Foundation.exit(1)
+            }
+            print("PASS: isolated bundle identity and all 36 pending-hide policy states. No menu-bar operations performed.")
+            return
+        }
         guard !LayoutResetCommand.runIfRequested() else {
             return
         }

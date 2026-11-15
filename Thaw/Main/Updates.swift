@@ -79,7 +79,7 @@ final class UpdatesManager: NSObject {
                 Defaults.store.set(newValue != .stable, forKey: "AllowsBetaUpdates")
             }
             Task {
-                guard hasStartedUpdater else { return }
+                guard Constants.updatesEnabled, hasStartedUpdater else { return }
                 updater.checkForUpdatesInBackground()
             }
         }
@@ -114,9 +114,11 @@ final class UpdatesManager: NSObject {
     var automaticallyChecksForUpdates: Bool {
         get {
             access(keyPath: \.automaticallyChecksForUpdates)
+            guard Constants.updatesEnabled else { return false }
             return updater.automaticallyChecksForUpdates
         }
         set {
+            guard Constants.updatesEnabled else { return }
             withMutation(keyPath: \.automaticallyChecksForUpdates) {
                 updater.automaticallyChecksForUpdates = newValue
                 if newValue {
@@ -130,9 +132,11 @@ final class UpdatesManager: NSObject {
     var automaticallyDownloadsUpdates: Bool {
         get {
             access(keyPath: \.automaticallyDownloadsUpdates)
+            guard Constants.updatesEnabled else { return false }
             return updater.automaticallyDownloadsUpdates
         }
         set {
+            guard Constants.updatesEnabled else { return }
             withMutation(keyPath: \.automaticallyDownloadsUpdates) {
                 updater.automaticallyDownloadsUpdates = newValue
                 if newValue {
@@ -145,6 +149,10 @@ final class UpdatesManager: NSObject {
     /// Performs the initial setup of the manager.
     func performSetup(with appState: AppState) {
         self.appState = appState
+        guard Constants.updatesEnabled else {
+            Defaults.set(true, forKey: .hasSeenUpdateConsent)
+            return
+        }
         _ = updaterController
         // A SUFeedURL user-defaults entry would otherwise take precedence
         // over Info.plist and silently redirect update checks; the delegate's
@@ -155,7 +163,7 @@ final class UpdatesManager: NSObject {
 
     /// Starts the updater if it hasn't been started yet.
     func startUpdaterIfNeeded() {
-        guard !hasStartedUpdater else {
+        guard Constants.updatesEnabled, !hasStartedUpdater else {
             return
         }
         hasStartedUpdater = true
@@ -181,6 +189,7 @@ final class UpdatesManager: NSObject {
 
     /// Checks for app updates.
     @objc func checkForUpdates() {
+        guard Constants.updatesEnabled else { return }
         #if DEBUG
             // Checking for updates hangs in debug mode.
             let alert = NSAlert()
@@ -205,6 +214,7 @@ final class UpdatesManager: NSObject {
     /// check runs in the background, so the user only sees the new build
     /// or the releases page.
     func checkForBetaUpdateAfterCompatibilityWarning() {
+        guard Constants.updatesEnabled else { return }
         beginCompatibilityCheck()
         #if DEBUG
             // Checking for updates hangs in debug mode, so the promise is

@@ -11,6 +11,10 @@ import Foundation
 /// App-specific constants for the main Thaw target.
 /// System-framework paths shared with XPC targets live in SharedConstants.
 nonisolated enum Constants {
+    /// This local fork has no signed update feed and must not install upstream packages.
+    static let updatesEnabled = false
+    static let urlScheme = "thaw-compat26"
+
     // swiftlint:disable force_unwrapping
 
     static let versionString = Bundle.main.versionString!

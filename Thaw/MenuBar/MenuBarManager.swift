@@ -261,10 +261,20 @@ final class MenuBarManager {
                     guard await (try? Task.sleep(for: delay)) != nil else { return }
 
                     guard let self else { return }
-                    guard appState.settings.general.rehideStrategy == strategy else { return }
+                    guard appState.settings.general.rehideStrategy.allowsPendingRehide(
+                        autoRehide: appState.settings.general.autoRehide,
+                        taskCancelled: Task.isCancelled,
+                        scheduledStrategy: strategy
+                    ) else { return }
                     if strategy == .smart, await appState.itemManager.isAnyMenuBarItemMenuOpen() {
                         return
                     }
+
+                    guard appState.settings.general.rehideStrategy.allowsPendingRehide(
+                        autoRehide: appState.settings.general.autoRehide,
+                        taskCancelled: Task.isCancelled,
+                        scheduledStrategy: strategy
+                    ) else { return }
 
                     self.hideVisibleSections()
                 }

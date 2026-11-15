@@ -372,7 +372,8 @@ final class MenuBarSection {
             return
         }
 
-        switch appState.settings.general.rehideStrategy {
+        let strategy = appState.settings.general.rehideStrategy
+        switch strategy {
         case .smart, .timed:
             // The hide at the end of the interval defers (by restarting the
             // checks) while the cursor is over the bar or Thaw Bar (#924), or
@@ -381,11 +382,22 @@ final class MenuBarSection {
             rehideTask = Task { [weak self, weak appState] in
                 try? await Task.sleep(for: .seconds(interval))
                 guard !Task.isCancelled, let self, let appState else { return }
+                guard appState.settings.general.rehideStrategy.allowsPendingRehide(
+                    autoRehide: appState.settings.general.autoRehide,
+                    taskCancelled: Task.isCancelled,
+                    scheduledStrategy: strategy
+                ) else { return }
                 if self.isMouseInsideActiveArea() {
                     self.startRehideChecks()
                     return
                 }
-                if await appState.itemManager.isAnyMenuBarItemMenuOpen() {
+                let menuOpen = await appState.itemManager.isAnyMenuBarItemMenuOpen()
+                guard appState.settings.general.rehideStrategy.allowsPendingRehide(
+                    autoRehide: appState.settings.general.autoRehide,
+                    taskCancelled: Task.isCancelled,
+                    scheduledStrategy: strategy
+                ) else { return }
+                if menuOpen {
                     self.startRehideChecks()
                     return
                 }

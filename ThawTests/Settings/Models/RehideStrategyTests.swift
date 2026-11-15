@@ -115,4 +115,31 @@ struct RehideStrategyTests {
         #expect(RehideStrategy.fromString("TIMED") == nil)
         #expect(RehideStrategy.fromString("focused_app") == nil) // snake_case not supported
     }
+
+    @Test("A pending hide requires the current strategy, an enabled preference and a live task",
+          arguments: RehideStrategy.allCases, RehideStrategy.allCases)
+    func pendingHideEligibility(current: RehideStrategy, scheduled: RehideStrategy) {
+        for enabled in [false, true] {
+            for cancelled in [false, true] {
+                #expect(current.allowsPendingRehide(
+                    autoRehide: enabled,
+                    taskCancelled: cancelled,
+                    scheduledStrategy: scheduled
+                ) == (enabled && !cancelled && current == scheduled))
+            }
+        }
+    }
+
+    @Test("Disabling automatic rehiding invalidates an already eligible hide", arguments: RehideStrategy.allCases)
+    func disablingInvalidatesPendingHide(strategy: RehideStrategy) {
+        var enabled = true
+        #expect(strategy.allowsPendingRehide(autoRehide: enabled, taskCancelled: false, scheduledStrategy: strategy))
+        enabled = false
+        #expect(!strategy.allowsPendingRehide(autoRehide: enabled, taskCancelled: false, scheduledStrategy: strategy))
+    }
+
+    @Test("Cancellation invalidates a hide after its menu query", arguments: RehideStrategy.allCases)
+    func cancellationInvalidatesPendingHide(strategy: RehideStrategy) {
+        #expect(!strategy.allowsPendingRehide(autoRehide: true, taskCancelled: true, scheduledStrategy: strategy))
+    }
 }

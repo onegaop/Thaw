@@ -236,7 +236,8 @@ extension MenuBarItemImageCache {
 
     private static var cacheFileURL: URL? {
         let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
-        return cacheDir?.appendingPathComponent("com.stonerl.thaw/imageCache.json")
+        return cacheDir?.appendingPathComponent(SharedConstants.productIdentifier, isDirectory: true)
+            .appendingPathComponent("imageCache.json")
     }
 
     private static nonisolated let maxCacheAgeSeconds: TimeInterval = 30

@@ -24,6 +24,10 @@ the items under New and Fixed.
 
 ## [Unreleased]
 
+### Fixed
+
+- Turning off Automatically rehide now prevents pending timed, focus-change and outside-click hides from closing items. Pending hides also stop when you change the rehide strategy.
+
 ## [2.2.0-beta.2] - 2026-11-05
 
 **macOS 15 and 26 · Build 65**

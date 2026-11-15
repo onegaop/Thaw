@@ -11,6 +11,10 @@ import Foundation
 /// Only values that are needed in every target belong here; app-only
 /// constants live in Constants (Thaw target).
 nonisolated enum SharedConstants {
+    /// Independent storage for the local macOS 26 product, including its XPC services.
+    static let storageDirectoryName = "Thaw Compat 26"
+    static let productIdentifier = "com.tony.thaw.compat26"
+
     // MARK: - System Framework Paths
 
     /// Info.plist key used to configure the SkyLight private framework path.
