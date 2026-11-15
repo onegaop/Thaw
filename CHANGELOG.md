@@ -24,6 +24,10 @@ the items under New and Fixed.
 
 ## [Unreleased]
 
+### Changed
+
+- The Thaw Bar no longer repeatedly resizes and repositions when AppKit rounds a half-point content size. Invalid transient sizes are ignored; existing layout preferences are unchanged.
+
 ### Fixed
 
 - Turning off Automatically rehide now prevents pending timed, focus-change and outside-click hides from closing items. Pending hides also stop when you change the rehide strategy.

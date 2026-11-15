@@ -185,7 +185,9 @@ final class IceBarPanel: NSPanel {
         }
 
         let location = appState.settings.displaySettings.iceBarLocation(for: screen.displayID)
-        setFrameOrigin(getOrigin(for: location))
+        let origin = getOrigin(for: location)
+        guard origin != frame.origin else { return }
+        setFrameOrigin(origin)
     }
 
     /// Shows the panel on the given screen, displaying the given
@@ -298,7 +300,7 @@ final class IceBarPanel: NSPanel {
     func resizeToContent() {
         guard let contentView, let screen else { return }
         let ideal = contentView.intrinsicContentSize
-        guard ideal != .zero, ideal != frame.size else { return }
+        guard ideal.width.isFinite, ideal.height.isFinite, ideal.width > 0, ideal.height > 0, ideal != frame.size else { return }
         setFrame(NSRect(origin: frame.origin, size: ideal), display: true, animate: false)
         updateOrigin(for: screen)
     }
@@ -311,9 +313,18 @@ private final class IceBarHostingView: NSHostingView<IceBarContentView> {
         NSEdgeInsets()
     }
 
+    private var contentFit = ThawBarContentFit()
+
     override func layout() {
         super.layout()
-        (window as? IceBarPanel)?.resizeToContent()
+        let ideal = intrinsicContentSize
+        guard let panel = window as? IceBarPanel,
+              contentFit.needsResize(ideal: ideal, frameSize: panel.frame.size)
+        else { return }
+        panel.resizeToContent()
+        if panel.screen != nil {
+            contentFit.noteResize(ideal: ideal, frameSize: panel.frame.size)
+        }
     }
 
     init(

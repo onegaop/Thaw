@@ -103,3 +103,17 @@ No XPC validation was weakened or rewritten. The intermediate ad-hoc candidate
 was re-signed before installation.
 
 Live hide/show and clicking require a separate interactive trial.
+
+## Display stability update (compat26.2)
+
+Backported Thaw 3's `ThawBarContentFit` memo into the legacy hosting view.
+AppKit can round a 576.5-point ideal width to a 577-point window. Previously,
+every layout pass treated that as a new size and refitted/repositioned the bar.
+The memo recognizes the already-applied pair. Genuine content changes or an
+externally changed frame still trigger a fit. Non-finite/non-positive sizes
+are ignored, and an unchanged origin no longer moves the window.
+
+This does not change saved item order, display choice, colors, spacing, or
+placement preferences. Five display-fitting regression tests were added;
+all 26 isolated tests and strict lint passed. A 100-pass simulated layout
+sequence fits the rounded size exactly once. Real hover appearance requires an interactive check.
