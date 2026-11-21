@@ -31,6 +31,7 @@ the items under New and Fixed.
 ### Fixed
 
 - Turning off Automatically rehide now prevents pending timed, focus-change and outside-click hides from closing items. Pending hides also stop when you change the rehide strategy.
+- **A Thaw Bar with its own tint no longer hides its items.** The tint now colors the bar behind the items, so even a fully opaque one leaves them visible.
 
 ## [2.2.0-beta.2] - 2026-11-05
 
