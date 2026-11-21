@@ -452,7 +452,7 @@ extension MenuBarItemManager {
 
     /// Fresh divider records from windows Thaw owns directly. These provide
     /// parked-lane geometry without another full menu-bar enumeration.
-    private func authoritativeMoveGeometryDividers() -> [MenuBarItem] {
+    func authoritativeMoveGeometryDividers() -> [MenuBarItem] {
         guard let appState else { return [] }
         return [MenuBarSection.Name.hidden, .alwaysHidden].compactMap { identifier in
             guard let window = appState.menuBarManager.controlItem(withName: identifier)?.window,
@@ -471,6 +471,11 @@ extension MenuBarItemManager {
         snapshot: [MenuBarItem],
         on displayID: CGDirectDisplayID
     ) throws -> (source: MoveEndpointDisposition, target: MoveEndpointDisposition) {
+        if let anchor = Self.requiredPendingAnchor, anchor.destination.targetItem.windowID == target.windowID,
+           !anchor.canDrop(on: target, displayID: displayID, dividers: snapshot)
+        {
+            throw EventError.unsafeMovePath(item)
+        }
         let selectedBounds = CGDisplayBounds(displayID)
         let displays = NSScreen.screens.map {
             MoveDisplayGeometry(id: $0.displayID, bounds: CGDisplayBounds($0.displayID))

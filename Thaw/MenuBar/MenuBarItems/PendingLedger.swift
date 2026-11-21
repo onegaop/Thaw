@@ -132,27 +132,46 @@ nonisolated enum PendingLedger {
             return .skip(reason: .itemNotPresent)
         }
 
-        // Already hidden: clear the entry.
-        let itemBounds = boundsForWindowID[item.windowID] ?? item.bounds
-        guard itemBounds.minX >= hiddenBounds.maxX else {
-            return .clearEntry
+        let target: MenuBarItemManager.LayoutResetTarget = targetSection == .alwaysHidden && controlItems.alwaysHidden != nil
+            ? .alwaysHidden : .hidden
+        func bounds(_ item: MenuBarItem) -> CGRect {
+            boundsForWindowID[item.windowID] ?? item.bounds
         }
-
-        // Stored neighbor, then fallback neighbor, then section boundary.
-        if let destInfo = returnInfo.destinations[entry.tagIdentifier],
-           let neighborTagString = destInfo["neighbor"],
-           let neighborItem = items.first(where: { neighborTagString == $0.tag.tagIdentifier })
-        {
-            let destination: MenuBarItemManager.MoveDestination = destInfo["position"] == "left"
-                ? .leftOfItem(neighborItem)
-                : .rightOfItem(neighborItem)
+        func belongsToSection(_ item: MenuBarItem) -> Bool {
+            target.contains(itemBounds: bounds(item), hiddenBounds: hiddenBounds, alwaysHiddenBounds: controlItems.alwaysHidden.map(bounds))
+        }
+        let alreadyInSection = belongsToSection(item)
+        func placement(at destination: MenuBarItemManager.MoveDestination) -> PendingMove {
+            let sourceX = bounds(item).minX
+            let neighborX = bounds(destination.targetItem).minX
+            let correctSide = switch destination {
+            case .leftOfItem: sourceX < neighborX
+            case .rightOfItem: sourceX > neighborX
+            }
+            if alreadyInSection, correctSide {
+                let span = min(sourceX, neighborX) ... max(sourceX, neighborX)
+                let intervening = items.contains { other in
+                    other.windowID != item.windowID && other.windowID != destination.targetItem.windowID && span.contains(bounds(other).minX)
+                }
+                if !intervening {
+                    return .clearEntry
+                }
+            }
             return .move(item: item, destination: destination)
         }
 
-        if let fallbackTag = returnInfo.fallbackNeighbors[entry.tagIdentifier],
-           let fallbackItem = items.first(where: { $0.tag.tagIdentifier == fallbackTag.tagIdentifier })
-        {
-            return .move(item: item, destination: .rightOfItem(fallbackItem))
+        // A neighbor that moved to another section no longer describes the saved slot.
+        func neighbor(_ tag: String) -> MenuBarItem? {
+            items.first { $0.windowID != item.windowID && $0.tag.tagIdentifier == tag && belongsToSection($0) }
+        }
+        if let info = returnInfo.destinations[entry.tagIdentifier], let tag = info["neighbor"], let anchor = neighbor(tag) {
+            return placement(at: info["position"] == "left" ? .leftOfItem(anchor) : .rightOfItem(anchor))
+        }
+        if let tag = returnInfo.fallbackNeighbors[entry.tagIdentifier], let anchor = neighbor(tag.tagIdentifier) {
+            return placement(at: .rightOfItem(anchor))
+        }
+        if alreadyInSection {
+            return .clearEntry
         }
 
         switch targetSection {

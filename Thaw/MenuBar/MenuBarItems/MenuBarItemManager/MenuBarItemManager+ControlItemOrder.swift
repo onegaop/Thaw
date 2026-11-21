@@ -318,6 +318,7 @@ extension MenuBarItemManager {
     func relocatePendingItems(
         _ items: [MenuBarItem],
         controlItems: ControlItemPair,
+        on displayID: CGDirectDisplayID?,
         shouldBeginMove: (@MainActor () -> Bool)? = nil
     ) async -> CacheDrivenMoveOutcome {
         let beginMove = shouldBeginMove
@@ -438,6 +439,25 @@ extension MenuBarItemManager {
                     }
                     return .hidden
                 }()
+                let savedDestination = pendingReturnDestinations[tagIdentifier]
+                let pendingValue = pendingRelocations[tagIdentifier]
+                let stillPending: @MainActor () -> Bool = {
+                    self.pendingRelocations[tagIdentifier] == pendingValue && self.pendingReturnDestinations[tagIdentifier] == savedDestination
+                }
+                let anchorSection: MenuBarSection.Name = targetSection == .alwaysHidden && controlItems.alwaysHidden == nil ? .hidden : targetSection
+                let anchor = destination.targetItem.isControlItem ? nil : PendingAnchor(destination: destination, section: anchorSection)
+                if anchor != nil, displayID == nil { continue }
+                let retryEndpoints = anchor.map { anchor in
+                    PendingMoveRetries.Endpoints(
+                        source: item.windowID,
+                        anchor: destination.targetItem.windowID,
+                        displayID: displayID,
+                        display: displayID.map(CGDisplayBounds) ?? .null,
+                        target: destination.targetItem.bounds,
+                        reachable: displayID.map { anchor.canDrop(on: destination.targetItem, displayID: $0, dividers: [controlItems.hidden, controlItems.alwaysHidden].compactMap { $0 }) } ?? false
+                    )
+                }
+                guard pendingMoveRetries.shouldAttempt(tagIdentifier, endpoints: retryEndpoints) else { continue }
                 MenuBarItemManager.diagLog.info(
                     """
                     Relocating \(item.logString) back to \
@@ -448,16 +468,22 @@ extension MenuBarItemManager {
                     try await move(
                         item: item,
                         to: destination,
+                        on: displayID,
                         skipInputPause: true,
-                        options: .init(shouldBegin: {
-                            let shouldBegin = beginMove?() ?? true
-                            if shouldBegin {
-                                attemptRecorder.didAcceptMoveAttempt = true
-                                attemptRecorder.didAcceptCurrentMove = true
-                            }
-                            return shouldBegin
-                        })
+                        options: .init(
+                            shouldProceed: stillPending,
+                            shouldBegin: {
+                                let shouldBegin = stillPending() && (beginMove?() ?? true)
+                                if shouldBegin {
+                                    attemptRecorder.didAcceptMoveAttempt = true
+                                    attemptRecorder.didAcceptCurrentMove = true
+                                }
+                                return shouldBegin
+                            },
+                            pendingAnchor: anchor
+                        )
                     )
+                    guard stillPending() else { continue }
                     pendingRelocations.removeValue(forKey: tagIdentifier)
                     pendingReturnDestinations.removeValue(forKey: tagIdentifier)
                     didCompleteMove = true
@@ -470,6 +496,12 @@ extension MenuBarItemManager {
                     return outcome()
                 } catch {
                     didFailAcceptedMove = didFailAcceptedMove || attemptRecorder.didAcceptCurrentMove
+                    var exhausted = false
+                    if let retryEndpoints, !Task.isCancelled,
+                       stillPending(), PendingMoveRetries.shouldRetry(error)
+                    {
+                        exhausted = pendingMoveRetries.recordFailure(tagIdentifier, endpoints: retryEndpoints)
+                    }
                     MenuBarItemManager.diagLog.error(
                         """
                         Failed to relocate \(item.logString) back to \
@@ -481,7 +513,8 @@ extension MenuBarItemManager {
                         to: destination,
                         expectedSection: targetSection,
                         error: error,
-                        source: "pending item restoration"
+                        source: "pending item restoration",
+                        pendingRetriesExhausted: exhausted
                     )
                 }
 
@@ -494,6 +527,7 @@ extension MenuBarItemManager {
                 break
 
             case let .skip(reason):
+                pendingMoveRetries.forget(tagIdentifier)
                 switch reason {
                 case .waitForRelaunchActive:
                     if let item = items.first(where: { entry.tagIdentifier == $0.tag.tagIdentifier }) {

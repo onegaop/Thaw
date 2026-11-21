@@ -242,6 +242,7 @@ extension MenuBarItemManager {
         /// The user asked for this move, directly or by revealing an item.
         /// It bypasses the move circuit breaker and, on landing, clears it.
         var isUserInitiated = false
+        var pendingAnchor: PendingAnchor?
     }
 
     /// Shorter than the cursor watchdog and queued callers' patience.
@@ -476,13 +477,11 @@ extension MenuBarItemManager {
                         nestedOptions.didFinishWhileHoldingGate = nil
                         _ = try budget.remaining()
                         try await Self.$currentMoveBudget.withValue(budget) {
-                            try await self.move(
-                                item: item,
-                                to: destination,
-                                on: displayID,
-                                skipInputPause: true,
-                                options: nestedOptions
-                            )
+                            try await self.withPendingAnchor(
+                                options.pendingAnchor, source: item, on: displayID, budget: budget, shouldProceed: options.shouldProceed
+                            ) {
+                                try await self.move(item: item, to: destination, on: displayID, skipInputPause: true, options: nestedOptions)
+                            }
                         }
                     }
                 )

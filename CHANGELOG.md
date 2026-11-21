@@ -30,6 +30,7 @@ the items under New and Fixed.
 
 ### Fixed
 
+- Automatic position restoration briefly opens a concealed section when its saved neighbor is offscreen and verifies the item returns to the saved side. Repeated failures against the same neighbor back off.
 - Opening the Thaw Bar with missing captures now shows its loading message until the menu bar glyphs are ready or the first capture finishes. A warm row still opens immediately.
 - Turning off Automatically rehide now prevents pending timed, focus-change and outside-click hides from closing items. Pending hides also stop when you change the rehide strategy.
 - **A Thaw Bar with its own tint no longer hides its items.** The tint now colors the bar behind the items, so even a fully opaque one leaves them visible.

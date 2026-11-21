@@ -632,6 +632,7 @@ extension MenuBarItemManager {
             let pendingRelocationOutcome = await relocatePendingItems(
                 items,
                 controlItems: controlItems,
+                on: displayID,
                 shouldBeginMove: {
                     snapshotIsCurrent("pending-item relocation move preflight")
                 }
