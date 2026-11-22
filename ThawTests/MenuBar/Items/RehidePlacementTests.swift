@@ -123,3 +123,86 @@ struct RehidePlacementTests {
         #expect(!policy().allows(.leftOfItem(old), in: [hidden, old, moved]))
     }
 }
+
+extension RehidePlacementTests {
+    private var exactRow: [MenuBarItem] {
+        [item(1, -3226, onScreen: false), item(2, -3190, onScreen: false),
+         item(3, -3154, onScreen: false), item(4, -3118, width: 4500, onScreen: false, tag: .hiddenControlItem)]
+    }
+
+    @Test("Only the adjacent parked right window of the original ordinary section can be recorded")
+    func captureExactSlot() throws {
+        let row = exactRow, plan = policy(), source = row[1], right = row[2]
+        let slot = try #require(plan.exactSlot(for: source, destination: .leftOfItem(right), in: row))
+        #expect(slot.left?.windowID == row[0].windowID)
+        #expect(plan.exactSlot(for: source, destination: .rightOfItem(row[0]), in: row) == nil)
+        #expect(plan.exactSlot(for: row[0], destination: .leftOfItem(right), in: row) == nil)
+        #expect(plan.exactSlot(for: source, destination: .leftOfItem(row[3]), in: row) == nil)
+        #expect(policy(.alwaysHidden).exactSlot(for: source, destination: .leftOfItem(right), in: row) == nil)
+        let unowned = MenuBarItem.fixture(tag: source.tag, windowID: source.windowID, bounds: source.bounds, sourcePID: nil, isOnScreen: false)
+        #expect(plan.exactSlot(for: unowned, destination: .leftOfItem(right), in: [row[0], unowned, right, row[3]]) == nil)
+        let system = item(8, -3190, onScreen: false, tag: .appItem(bundleID: "com.apple.controlcenter", title: "module"))
+        #expect(plan.exactSlot(for: system, destination: .leftOfItem(right), in: [row[0], system, right, row[3]]) == nil)
+    }
+
+    @Test("Cross-display corridors, replaced windows, changed owners, duplicate tags and inserted neighbors cannot receive a press")
+    func rejectStaleExactSlot() throws {
+        let row = exactRow, plan = policy()
+        let slot = try #require(plan.exactSlot(for: row[1], destination: .leftOfItem(row[2]), in: row))
+        let anchor = item(3, -3190, onScreen: false)
+        let exposed = [row[0], item(2, 1510), anchor, row[3]]
+        #expect(slot.destination(in: exposed, placement: plan) == .leftOfItem(anchor))
+        let compressed = item(4, -3118, width: 4490, onScreen: false, tag: .hiddenControlItem)
+        #expect(slot.destination(in: [row[0], exposed[1], anchor, compressed], placement: plan) == nil)
+        #expect(slot.reachableRight(in: exposed, placement: plan) == nil)
+        let openRow = [item(2, 1510), item(3, 1050), item(4, 1110, width: 8, tag: .hiddenControlItem)]
+        #expect(slot.reachableRight(in: openRow, placement: plan) == .leftOfItem(openRow[1]))
+        var dual = plan
+        dual.otherDisplays = [CGRect(x: -2500, y: 0, width: 1000, height: 800)]
+        #expect(slot.destination(in: exposed, placement: dual) == nil)
+        let newWindow = item(19, -3190, onScreen: false, tag: anchor.tag)
+        let newPID = MenuBarItem.fixture(tag: anchor.tag, windowID: anchor.windowID, bounds: anchor.bounds, sourcePID: 5678, isOnScreen: false)
+        for replacement in [newWindow, newPID, item(3, -3190, onScreen: false, y: 50)] {
+            #expect(slot.destination(in: [row[0], exposed[1], replacement, row[3]], placement: plan) == nil)
+        }
+        #expect(slot.destination(in: exposed + [newWindow], placement: plan) == nil)
+        #expect(slot.destination(in: [item(1, -3262, onScreen: false), item(8, -3226, onScreen: false), exposed[1], anchor, row[3]], placement: plan) == nil)
+        #expect(slot.observation(in: Array(exposed.dropFirst()), placement: plan) == nil)
+        let endpoints = MenuBarItemManager.CurrentMoveEndpoints(source: exposed[1], target: anchor, snapshot: exposed)
+        #expect(slot.validPostedEndpoints(endpoints, placement: plan))
+        #expect(!slot.validPostedEndpoints(endpoints, placement: dual))
+    }
+
+    @Test("A transient missing source breaks readback continuity and a reflow frame cannot confirm landing")
+    func missingSourceDuringReturn() throws {
+        let row = exactRow, plan = policy()
+        let slot = try #require(plan.exactSlot(for: row[1], destination: .leftOfItem(row[2]), in: row))
+        var readback = RehidePlacement.ExactSlot.Readback()
+        let visible = try #require(slot.observation(in: [row[0], item(2, 1500), item(3, -3190, onScreen: false), row[3]], placement: plan))
+        let landed = try #require(slot.observation(in: row, placement: plan))
+        #expect(readback.stable(visible) == nil)
+        #expect(readback.stable(visible) == visible)
+        #expect(readback.stable(slot.observation(in: [row[0], row[2], row[3]], placement: plan)) == nil)
+        #expect(slot.observation(in: [item(1, -5500, onScreen: false), row[1], item(3, -5464, onScreen: false), row[3]], placement: plan) == nil)
+        #expect(readback.stable(landed) == nil)
+        #expect(readback.stable(landed) == landed)
+    }
+
+    @Test("A posted gesture cannot recover in its first pass, on a forced pass, or with an ambiguous landing")
+    func noSecondGesture() {
+        typealias Slot = RehidePlacement.ExactSlot
+        #expect(Slot.sameBar(display: 3, space: 1, activeDisplay: 3, activeSpace: 1))
+        #expect(!Slot.sameBar(display: 3, space: 1, activeDisplay: 7, activeSpace: 1))
+        #expect(!Slot.sameBar(display: 3, space: 1, activeDisplay: 3, activeSpace: 2))
+        #expect(!Slot.sameBar(display: 3, space: 0, activeDisplay: 3, activeSpace: 0))
+        #expect(Slot.Phase.posted.decision(after: .visible([]), idlePass: true) == .waitForIdle)
+        #expect(Slot.Phase.visibleAwaitingIdle.decision(after: .visible([]), idlePass: false) == .waitForIdle)
+        #expect(Slot.Phase.visibleAwaitingIdle.decision(after: .visible([]), idlePass: true) == .recover)
+        #expect(Slot.Phase.recovering.decision(after: .visible([]), idlePass: true) == .preserve)
+        for phase: Slot.Phase in [.posted, .visibleAwaitingIdle, .recovering] {
+            #expect(phase.decision(after: nil, idlePass: true) == .preserve)
+            #expect(phase.decision(after: .landed([]), idlePass: false) == .finished)
+        }
+        #expect(Slot.protectedTags(["own": [Slot.pendingKey: "2", "neighbor": "right"], "other": ["neighbor": "abc"]]) == ["own"])
+    }
+}

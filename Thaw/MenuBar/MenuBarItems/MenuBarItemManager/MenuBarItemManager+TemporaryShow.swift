@@ -45,6 +45,9 @@ extension MenuBarItemManager {
 
         let shownWindowID: CGWindowID
         let shownSpaceID: CGSSpaceID
+        var exactSlot: RehidePlacement.ExactSlot?
+        var unconfirmedReadPasses = 0
+        var exactReturnPhase = RehidePlacement.ExactSlot.Phase.ready
         var didRevealForRehide = false
 
         var isOnActiveBar: Bool {
@@ -447,11 +450,15 @@ extension MenuBarItemManager {
             await rehideTemporarilyShownItems(force: true, isCalledFromTemporarilyShow: true)
 
             if temporarilyShownItemContexts.contains(where: { $0.tag.matchesIgnoringWindowID(item.tag) }) {
+                // A second presentation must not retire a gesture that is still being verified.
+                guard pendingReturnDestinations[item.tag.tagIdentifier]?[RehidePlacement.ExactSlot.pendingKey] == nil else { return .showFailed }
                 // A fast double click; replace the old context.
                 removeTemporarilyShownItemFromCache(with: item.tag)
             }
         }
 
+        let originalSpace = Bridging.getActiveSpaceID()
+        let originalDisplay = Bridging.getActiveMenuBarDisplayID()
         let items = await MenuBarItem.getMenuBarItems(on: resolvedDisplayID, option: .activeSpace)
 
         var item = item
@@ -469,6 +476,12 @@ extension MenuBarItemManager {
             return .showFailed
         }
 
+        let exactSlot = originalDisplay == resolvedDisplayID && RehidePlacement.ExactSlot.sameBar(
+            display: resolvedDisplayID, space: originalSpace, activeDisplay: Bridging.getActiveMenuBarDisplayID(), activeSpace: Bridging.getActiveSpaceID()
+        )
+            ? rehidePlacement(for: originalSection, on: resolvedDisplayID)?.exactSlot(for: item, destination: returnInfo.destination, in: items)
+            : nil
+
         // Prefer left of the visible control item, else the first non-control item.
         let visibleControl = items.first(matching: .visibleControlItem)
         let targetItem = visibleControl ?? items.first(where: { !$0.isControlItem && $0.canBeHidden }) ?? items.first
@@ -482,6 +495,11 @@ extension MenuBarItemManager {
         }
 
         let moveDestination: MoveDestination = .leftOfItem(anchor)
+
+        let heldDestination = pendingReturnDestinations[tagIdentifier].flatMap {
+            $0[RehidePlacement.ExactSlot.pendingKey] == nil ? nil : $0
+        }
+        let heldSection = pendingRelocations[tagIdentifier]
 
         // Recorded now in case the app quits before the rehide: macOS persists
         // the dragged position, so the icon would relaunch visible.
@@ -535,6 +553,10 @@ extension MenuBarItemManager {
                 // Re-assert in case a guard exit above skipped the write.
                 pendingReturnDestinations[tagIdentifier] = returnDestinationRecord
                 persistPendingRelocations()
+            } else if let heldDestination, let heldSection {
+                pendingRelocations[tagIdentifier] = heldSection
+                pendingReturnDestinations[tagIdentifier] = heldDestination
+                persistPendingRelocations()
             } else {
                 pendingRelocations.removeValue(forKey: tagIdentifier)
                 pendingReturnDestinations.removeValue(forKey: tagIdentifier)
@@ -555,6 +577,9 @@ extension MenuBarItemManager {
             fallbackNeighbor: returnInfo.fallbackNeighbor,
             originalSection: originalSection
         )
+        if context.shownSpaceID == originalSpace, context.isOnActiveBar {
+            context.exactSlot = exactSlot
+        }
         temporarilyShownItemContexts.append(context)
 
         rehideTimer?.invalidate()
@@ -796,7 +821,7 @@ extension MenuBarItemManager {
             }
 
             do {
-                switch try await returnShownItem(item, context: context) {
+                switch try await returnShownItem(item, context: context, allowIdleRecovery: !force) {
                 case .returned:
                     guard temporarilyShownItemContexts.contains(where: { $0 === context }) else { continue }
                     let key = context.tag.tagIdentifier

@@ -84,7 +84,7 @@ extension MenuBarItemManager {
             hiddenBounds: controlItems.hidden.bounds,
             alwaysHiddenBounds: controlItems.alwaysHidden?.bounds,
             overflowExemptUIDs: overflowSkipActive ? notchOverflowEjectedUIDs : [],
-            activelyShownTags: Set(temporarilyShownItemContexts.map(\.tag.tagIdentifier))
+            activelyShownTags: protectedTemporaryReturnTags
         )
     }
 

@@ -334,7 +334,7 @@ extension MenuBarItemManager {
         }
 
         // Currently shown items are handled by the normal rehide flow.
-        let activelyShownTags = Set(temporarilyShownItemContexts.map(\.tag.tagIdentifier))
+        let activelyShownTags = protectedTemporaryReturnTags
 
         let hiddenBounds = bestBounds(for: controlItems.hidden)
 
@@ -444,7 +444,7 @@ extension MenuBarItemManager {
                 let returnInfo = pendingReturnDestinations[tagIdentifier]
                 @MainActor func stillPending() -> Bool {
                     pendingRelocations[tagIdentifier] == targetKey && pendingReturnDestinations[tagIdentifier] == returnInfo &&
-                        !temporarilyShownItemContexts.contains { $0.tag.tagIdentifier == tagIdentifier }
+                        !protectedTemporaryReturnTags.contains(tagIdentifier)
                 }
                 MenuBarItemManager.diagLog.info(
                     """

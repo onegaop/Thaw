@@ -639,8 +639,12 @@ final class MenuBarItemManager {
         case ownerDidNotRespond
     }
 
-    /// Original sections of temporarily shown items whose apps quit before
-    /// the rehide, restored on relaunch.
+    /// Both recovery paths must yield while an exact return is unconfirmed.
+    var protectedTemporaryReturnTags: Set<String> {
+        Set(temporarilyShownItemContexts.map(\.tag.tagIdentifier)).union(RehidePlacement.ExactSlot.protectedTags(pendingReturnDestinations))
+    }
+
+    /// Original sections of temporarily shown items whose apps quit before the rehide.
     var pendingRelocations = [String: String]()
 
     /// Neighbor and side for restoring those items' ordering.
@@ -1466,7 +1470,7 @@ final class MenuBarItemManager {
             controlItems: controlItems,
             displayID: Bridging.getActiveMenuBarDisplayID()
         )
-        let activelyShownTags = Set(temporarilyShownItemContexts.map(\.tag.tagIdentifier))
+        let activelyShownTags = protectedTemporaryReturnTags
         let liveSectionItems = items.filter { item in
             guard !item.isControlItem else { return false }
             guard !activelyShownTags.contains(item.tag.tagIdentifier) else { return false }

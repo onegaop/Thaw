@@ -17,6 +17,127 @@ nonisolated struct RehidePlacement {
     let alwaysHiddenEnabled: Bool
     var otherDisplays: [CGRect] = []
 
+    /// Only the ordinary hidden row and its original, immediately adjacent right window qualify.
+    struct ExactSlot {
+        let source: MenuBarItem
+        let hiddenDivider: MenuBarItem
+        let right: MenuBarItem
+        let left: MenuBarItem?
+
+        enum Observation: Equatable {
+            case landed([CGRect])
+            case visible([CGRect])
+        }
+
+        enum Phase {
+            case ready, posted, visibleAwaitingIdle, recovering
+
+            func decision(after observation: Observation?, idlePass: Bool) -> Decision {
+                switch observation {
+                case .landed: .finished
+                case .visible where self == .recovering: .preserve
+                case .visible where self == .visibleAwaitingIdle && idlePass: .recover
+                case .visible: .waitForIdle
+                case nil: .preserve
+                }
+            }
+        }
+
+        enum Decision { case finished, recover, waitForIdle, preserve }
+
+        struct Readback {
+            private var previous: Observation?
+
+            mutating func stable(_ observation: Observation?) -> Observation? {
+                defer { previous = observation }
+                return previous == observation ? observation : nil
+            }
+        }
+
+        static func sameBar(display: CGDirectDisplayID, space: CGSSpaceID, activeDisplay: CGDirectDisplayID?, activeSpace: CGSSpaceID) -> Bool {
+            space != 0 && display == activeDisplay && space == activeSpace
+        }
+
+        static let pendingKey = "exactReturnInFlight"
+
+        static func protectedTags(_ records: [String: [String: String]]) -> Set<String> {
+            Set(records.compactMap { $0.value[pendingKey] == nil ? nil : $0.key })
+        }
+
+        private func current(_ original: MenuBarItem, in items: [MenuBarItem]) -> MenuBarItem? {
+            let matches = items.filter { $0.windowID == original.windowID || $0.tag.tagIdentifier == original.tag.tagIdentifier }
+            guard matches.count == 1, let match = matches.first, MenuBarItemManager.moveEndpointIsCurrent(match, expected: original)
+            else { return nil }
+            return match
+        }
+
+        private func collapsedDivider(in items: [MenuBarItem], placement: RehidePlacement) -> MenuBarItem? {
+            guard let (divider, _) = placement.dividers(in: items),
+                  MenuBarItemManager.moveEndpointIsCurrent(divider, expected: hiddenDivider),
+                  divider.bounds.size == hiddenDivider.bounds.size else { return nil }
+            return divider
+        }
+
+        private func neighbors(_ before: MenuBarItem, _ after: MenuBarItem, in items: [MenuBarItem]) -> Bool {
+            guard abs(before.bounds.maxX - after.bounds.minX) <= 1 else { return false }
+            return MenuBarItemManager.endpointsHaveCorrectPosition(
+                .init(source: before, target: after, snapshot: items), for: .leftOfItem(after)
+            )
+        }
+
+        func observation(in items: [MenuBarItem], placement: RehidePlacement) -> Observation? {
+            guard let item = current(source, in: items), let anchor = current(right, in: items), placement.isParked(anchor, in: items), let divider = collapsedDivider(in: items, placement: placement), item.bounds.minY == placement.display.minY, !item.bounds.isEmpty
+            else { return nil }
+            let landed = placement.isParked(item, in: items) && neighbors(item, anchor, in: items)
+            var frames = [item.bounds, anchor.bounds, divider.bounds]
+            if let left {
+                guard let witness = current(left, in: items), placement.isParked(witness, in: items), neighbors(witness, landed ? item : anchor, in: items) else { return nil }
+                frames.append(witness.bounds)
+            }
+            if landed {
+                return .landed(frames)
+            }
+            guard item.isOnScreen, placement.display.contains(item.bounds), item.bounds.minX >= divider.bounds.maxX, !placement.otherDisplays.contains(where: { $0.intersects(item.bounds) }) else { return nil }
+            return .visible(frames)
+        }
+
+        func reachableRight(in items: [MenuBarItem], placement: RehidePlacement) -> Destination? {
+            guard let anchor = current(right, in: items), placement.allows(.leftOfItem(anchor), in: items) else { return nil }
+            return .leftOfItem(anchor)
+        }
+
+        func validPostedEndpoints(_ endpoints: MenuBarItemManager.CurrentMoveEndpoints, placement: RehidePlacement) -> Bool {
+            guard MenuBarItemManager.moveEndpointIsCurrent(endpoints.source, expected: source), MenuBarItemManager.moveEndpointIsCurrent(endpoints.target, expected: right), current(source, in: endpoints.snapshot) != nil, let anchor = current(right, in: endpoints.snapshot), !placement.otherDisplays.contains(where: { $0.intersects(endpoints.source.bounds) })
+            else { return false }
+            return collapsedDivider(in: endpoints.snapshot, placement: placement) != nil && placement.isParked(anchor, in: endpoints.snapshot)
+        }
+
+        func destination(in items: [MenuBarItem], placement: RehidePlacement) -> Destination? {
+            guard case .visible = observation(in: items, placement: placement), let anchor = current(right, in: items) else { return nil }
+            return .leftOfItem(anchor)
+        }
+    }
+
+    private func isParked(_ item: MenuBarItem, in items: [MenuBarItem]) -> Bool {
+        guard section == .hidden, !item.isOnScreen, item.bounds.maxX < display.minX, item.bounds.minY == display.minY, contains(item, in: items) else { return false }
+        let corridor = item.bounds.union(CGRect(x: display.minX, y: display.minY, width: 1, height: item.bounds.height))
+        return !otherDisplays.contains { $0.intersects(corridor) }
+    }
+
+    func exactSlot(for source: MenuBarItem, destination: Destination, in items: [MenuBarItem]) -> ExactSlot? {
+        guard case let .leftOfItem(right) = destination, source.sourcePID.map({ $0 > 0 }) == true, right.sourcePID.map({ $0 > 0 }) == true, source.windowID != right.windowID, [source, right].allSatisfy({ item in
+            guard case let .string(bundleID) = item.tag.namespace else { return false }
+            return bundleID.contains(".") && !bundleID.hasPrefix("com.apple.") && item.tag.namespace != .thaw && !item.isSystemClone
+        }), source.isMovable, source.canBeHidden, right.canBeHidden else { return nil }
+        let row = items.sorted { $0.bounds.minX < $1.bounds.minX }
+        guard let index = row.firstIndex(where: { $0.windowID == source.windowID }) else { return nil }
+        let left = index > 0 && isParked(row[index - 1], in: items) ? row[index - 1] : nil
+        guard let (divider, _) = dividers(in: items) else { return nil }
+        let slot = ExactSlot(source: source, hiddenDivider: divider, right: right, left: left)
+        guard case .landed = slot.observation(in: items, placement: self) else { return nil }
+        return slot
+    }
+
     private var targetSection: MenuBarSection.Name {
         section == .alwaysHidden && !alwaysHiddenEnabled ? .hidden : section
     }
