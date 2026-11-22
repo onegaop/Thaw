@@ -71,6 +71,29 @@ struct UnresolvedSlotEditorDragTests {
         #expect(left?.windowID == dropbox.windowID)
     }
 
+    @Test("Neither side of a group drop uses one of its own members as the anchor")
+    func groupMembersAreNotTheirOwnAnchors() {
+        let before = Self.app("com.example.before", windowID: 3)
+        let after = Self.app("com.example.after", windowID: 4)
+        let first = Self.app("com.example.one", windowID: 1)
+        let second = Self.app("com.example.two", windowID: 2)
+        let slots: [MenuBarItem?] = [before, first, second, nil, after]
+        let members: Set<CGWindowID> = [1, 2]
+        #expect(LayoutBarPaddingView.nearestDropAnchor(in: slots, from: 1, towardRight: true, excluding: members) == after)
+        #expect(LayoutBarPaddingView.nearestDropAnchor(in: slots, from: 2, towardRight: false, excluding: members) == before)
+    }
+
+    @Test("The editor distinguishes an ordinary reachable slot from a parked, stale or missing release edge")
+    func onlyInterposeForUnreachableEdge() {
+        let anchor = Self.app("com.example.anchor", windowID: 7)
+        let target = MenuBarItemManager.MoveDestination.rightOfItem(anchor)
+        #expect(!LayoutBarPaddingView.needsParkedEditorMove(to: target, liveBounds: anchor.bounds, on: Self.display))
+        #expect(LayoutBarPaddingView.needsParkedEditorMove(to: target, liveBounds: anchor.bounds.offsetBy(dx: -3200, dy: 0), on: Self.display))
+        #expect(LayoutBarPaddingView.needsParkedEditorMove(to: target, liveBounds: nil, on: Self.display))
+        let divider = MenuBarItem.fixture(tag: .hiddenControlItem, windowID: 8)
+        #expect(!LayoutBarPaddingView.needsParkedEditorMove(to: .leftOfItem(divider), liveBounds: nil, on: Self.display))
+    }
+
     @Test("A section holding only the slot has no item anchor")
     func onlySlotLeavesNoAnchor() {
         let dragged = Self.app("com.lwouis.alt-tab-macos", windowID: 1)

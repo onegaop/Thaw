@@ -237,6 +237,8 @@ extension MenuBarItemManager {
         /// stale while queued.
         var shouldBegin: (@MainActor () -> Bool)?
         var acceptsEndpoints: MoveEndpointCheck?
+        /// Called only after preflight, when this attempt starts submitting events.
+        var willPostMoveEvents: (@MainActor () -> Void)?
         /// Runs while the gate is still held, after the move finished but
         /// before another move may enter.
         var didFinishWhileHoldingGate: (@MainActor () -> Void)?
@@ -715,7 +717,8 @@ extension MenuBarItemManager {
                     preferSourceAnchoredTeleport: policyState.revertedRun > 0
                         || policyState.unattributableSilentRun > 0,
                     cursorTrace: cursorTrace,
-                    acceptsEndpoints: options.acceptsEndpoints
+                    acceptsEndpoints: options.acceptsEndpoints,
+                    willPostMoveEvents: options.willPostMoveEvents
                 )
                 attemptStrategy = outcome.strategy
                 try await waitForLayoutToSettle(

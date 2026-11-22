@@ -30,6 +30,8 @@ the items under New and Fixed.
 
 ### Fixed
 
+- Dragging beside an offscreen item in the Layout editor now briefly reveals its section and checks the selected items against the requested neighbor after the section returns to its previous state.
+
 - Temporarily shown menu bar items check for a reachable return slot on their original display and keep their saved return position until they land in the correct section.
 - Quit from the menu bar can finish even when menu tracking delays cleanup.
 

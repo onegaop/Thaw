@@ -91,7 +91,8 @@ extension MenuBarItemManager {
         _ currentItemWindowIDs: [CGWindowID]? = nil,
         options: CacheOptions = CacheOptions(),
         waiterToken: Int? = nil,
-        cacheAttempt: CacheAttempt? = nil
+        cacheAttempt: CacheAttempt? = nil,
+        whileCurrent: (@MainActor () -> Bool)? = nil
     ) async {
         let skipRecentMoveCheck = options.skipRecentMoveCheck
         let resolveSourcePID = options.resolveSourcePID
@@ -126,6 +127,7 @@ extension MenuBarItemManager {
         let completedCyclesAtGateEntry = completedCacheCycles
         let moveTimestampAtGateEntry = lastMoveOperationTimestamp
         func snapshotIsCurrent(_ stage: String) -> Bool {
+            guard whileCurrent?() != false else { return false }
             guard !isRevealingForRehide, lastMoveOperationTimestamp == moveTimestampAtGateEntry else {
                 MenuBarItemManager.diagLog.debug(
                     "cacheItemsRegardless: discarding stale snapshot at \(stage) because an item moved during this pass"
@@ -510,7 +512,8 @@ extension MenuBarItemManager {
                             bypassSavedLayoutCooldown: bypassSavedLayoutCooldown,
                             forcePersistSavedOrder: forcePersistSavedOrder
                         ),
-                        waiterToken: waiterToken
+                        waiterToken: waiterToken,
+                        whileCurrent: whileCurrent
                     )
                 }
                 return
@@ -621,7 +624,8 @@ extension MenuBarItemManager {
                             bypassSavedLayoutCooldown: bypassSavedLayoutCooldown,
                             forcePersistSavedOrder: forcePersistSavedOrder
                         ),
-                        waiterToken: waiterToken
+                        waiterToken: waiterToken,
+                        whileCurrent: whileCurrent
                     )
                 }
                 return
@@ -661,7 +665,8 @@ extension MenuBarItemManager {
                             bypassSavedLayoutCooldown: bypassSavedLayoutCooldown,
                             forcePersistSavedOrder: forcePersistSavedOrder
                         ),
-                        waiterToken: waiterToken
+                        waiterToken: waiterToken,
+                        whileCurrent: whileCurrent
                     )
                 }
                 return
@@ -929,7 +934,8 @@ extension MenuBarItemManager {
                             bypassSavedLayoutCooldown: bypassSavedLayoutCooldown,
                             forcePersistSavedOrder: forcePersistSavedOrder
                         ),
-                        waiterToken: waiterToken
+                        waiterToken: waiterToken,
+                        whileCurrent: whileCurrent
                     )
                 }
             }

@@ -18,11 +18,13 @@ extension MenuBarItemManager {
     /// moved icon duplicates or vanishes. Discrete retries avoid deadlocking on nested recaches.
     func refreshCacheAfterLayoutEditorMove(
         timeout: Duration = .seconds(30),
-        forcePersistSavedOrder: Bool = false
+        forcePersistSavedOrder: Bool = false,
+        suppressSavedOrderPersistence: Bool = false,
+        whileCurrent: (@MainActor () -> Bool)? = nil
     ) async -> Bool {
         let deadline = ContinuousClock.now + timeout
 
-        while !Task.isCancelled {
+        while !Task.isCancelled, whileCurrent?() != false {
             let attempt = CacheAttempt()
             await cacheItemsRegardless(
                 options: .init(
@@ -31,9 +33,11 @@ extension MenuBarItemManager {
                     reuseCachedIdentities: true,
                     skipSavedLayoutApply: true,
                     suppressAutomaticMoves: true,
+                    suppressSavedOrderPersistence: suppressSavedOrderPersistence,
                     forcePersistSavedOrder: forcePersistSavedOrder
                 ),
-                cacheAttempt: attempt
+                cacheAttempt: attempt,
+                whileCurrent: whileCurrent
             )
             if attempt.didCompleteCycle {
                 return true

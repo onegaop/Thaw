@@ -220,10 +220,12 @@ final class LayoutBarPaddingView: NSView {
                     }
                 }
             } else if case let .item(draggingItem) = draggingSource.kind {
-                if let targetItem = nearestItem(toRightOf: index) {
+                let members = Set(draggedUnit.map(\.windowID))
+                let slots = arrangedItemSlots
+                if let targetItem = Self.nearestDropAnchor(in: slots, from: index, towardRight: true, excluding: members) {
                     willMove = true
                     move(items: draggedUnit, startingWith: draggingItem, to: .leftOfItem(targetItem), sourceContainer: sourceContainer)
-                } else if let targetItem = nearestItem(toLeftOf: index) {
+                } else if let targetItem = Self.nearestDropAnchor(in: slots, from: index, towardRight: false, excluding: members) {
                     willMove = true
                     move(items: draggedUnit, startingWith: draggingItem, to: .rightOfItem(targetItem), sourceContainer: sourceContainer)
                 } else if !arrangedViews.isEmpty {
@@ -253,6 +255,90 @@ final class LayoutBarPaddingView: NSView {
         return true
     }
 
+    static nonisolated func needsParkedEditorMove(
+        to destination: MenuBarItemManager.MoveDestination,
+        liveBounds: CGRect?,
+        on display: CGRect
+    ) -> Bool {
+        guard !destination.targetItem.isControlItem else { return false }
+        guard let liveBounds, !liveBounds.isEmpty else { return true }
+        // The row was frozen during the drag. Either sample may have caught the divider moving.
+        return [destination.targetItem.bounds, liveBounds].contains { bounds in
+            !display.contains(destination.targetPoint(in: bounds, on: display))
+        }
+    }
+
+    private func moveToParkedNeighbor(
+        items: [MenuBarItem],
+        destination: MenuBarItemManager.MoveDestination,
+        on displayID: CGDirectDisplayID,
+        sourceContainer: LayoutBarContainer?,
+        appState: AppState
+    ) {
+        guard !isStabilizing, let first = items.first else {
+            container.resumeArrangedViewUpdatesWithoutAnimation()
+            sourceContainer?.resumeArrangedViewUpdatesWithoutAnimation()
+            return
+        }
+        let section = container.section
+        let spaceID = Bridging.getActiveSpaceID()
+        let manager = appState.itemManager
+        isStabilizing = true
+        stabilizationGeneration &+= 1
+        let generation = stabilizationGeneration
+        stabilizationTask = Task { [self] in
+            let stillEditing: @MainActor () -> Bool = {
+                self.isCurrentStabilization(generation) && self.window?.isVisible == true
+                    && Bridging.getActiveMenuBarDisplayID() == displayID && Bridging.getActiveSpaceID() == spaceID
+            }
+            var confirmed = false
+            var failure: (any Error)?
+            do {
+                try await Task.sleep(for: .milliseconds(150))
+                guard stillEditing() else { throw CancellationError() }
+                try await manager.moveForLayoutEditor(
+                    items: items,
+                    to: destination,
+                    in: section,
+                    on: displayID,
+                    spaceID: spaceID,
+                    shouldProceed: stillEditing
+                )
+                if stillEditing() {
+                    for item in items {
+                        manager.removeTemporarilyShownItemFromCache(with: item.tag)
+                    }
+                    manager.recordExternalMoveOperation()
+                    confirmed = true
+                }
+            } catch MenuBarItemManager.EventError.moveSuperseded, is CancellationError {
+                Self.diagLog.debug("Parked editor move was superseded")
+            } catch {
+                failure = error
+                Self.diagLog.error("Parked editor move could not confirm the requested slot: \(error)")
+            }
+            let refreshed = await manager.refreshCacheAfterLayoutEditorMove(
+                forcePersistSavedOrder: confirmed,
+                suppressSavedOrderPersistence: !confirmed,
+                whileCurrent: stillEditing
+            )
+            if confirmed, refreshed, stillEditing(), containsNewItemsBadge() {
+                manager.updateNewItemsPlacement(section: section, arrangedViews: container.arrangedViews)
+            }
+            let shouldReport = stillEditing()
+            guard await resetStabilizingStateIfNeeded(generation: generation, sourceContainer: sourceContainer) else { return }
+            if let failure, shouldReport, let window {
+                let report = await MoveFailureDiagnosticReport.generate(
+                    for: .init(item: first, destination: destination, expectedSection: section, error: failure),
+                    appState: appState
+                )
+                if window.isVisible, stabilizationGeneration == generation {
+                    report.run(NSAlert(error: failure), in: window)
+                }
+            }
+        }
+    }
+
     /// Moves a group's drag unit as one block.
     ///
     /// The leftmost member takes destination and the rest chain to its
@@ -265,6 +351,25 @@ final class LayoutBarPaddingView: NSView {
     ) {
         guard let appState = container.appState else {
             return
+        }
+        if container.section != .visible, !destination.targetItem.isControlItem {
+            guard let displayID = appState.itemManager.itemCache.displayID ?? Bridging.getActiveMenuBarDisplayID() else {
+                container.resumeArrangedViewUpdatesWithoutAnimation()
+                sourceContainer?.resumeArrangedViewUpdatesWithoutAnimation()
+                return
+            }
+            let display = CGDisplayBounds(displayID)
+            let live = Bridging.getWindowBounds(for: destination.targetItem.windowID)
+            if Self.needsParkedEditorMove(to: destination, liveBounds: live, on: display) {
+                moveToParkedNeighbor(
+                    items: items.isEmpty ? [draggedItem] : items,
+                    destination: destination,
+                    on: displayID,
+                    sourceContainer: sourceContainer,
+                    appState: appState
+                )
+                return
+            }
         }
         // Anchor on the leftmost member, not the dragged one, or the group
         // reorders.
@@ -937,14 +1042,6 @@ final class LayoutBarPaddingView: NSView {
         }
     }
 
-    private func nearestItem(toRightOf index: Int) -> MenuBarItem? {
-        Self.nearestDropAnchor(in: arrangedItemSlots, from: index, towardRight: true)
-    }
-
-    private func nearestItem(toLeftOf index: Int) -> MenuBarItem? {
-        Self.nearestDropAnchor(in: arrangedItemSlots, from: index, towardRight: false)
-    }
-
     /// The item behind each arranged view, nil for non-item views, index for index.
     private var arrangedItemSlots: [MenuBarItem?] {
         arrangedViews.map { view in
@@ -962,13 +1059,14 @@ final class LayoutBarPaddingView: NSView {
     static nonisolated func nearestDropAnchor(
         in slots: [MenuBarItem?],
         from index: Int,
-        towardRight: Bool
+        towardRight: Bool,
+        excluding members: Set<CGWindowID> = []
     ) -> MenuBarItem? {
         let candidates = towardRight
             ? Array(slots.indices.filter { $0 > index })
             : Array(slots.indices.filter { $0 < index }.reversed())
         for candidate in candidates {
-            if let item = slots[candidate], item.isLayoutDropAnchor {
+            if let item = slots[candidate], !members.contains(item.windowID), item.isLayoutDropAnchor {
                 return item
             }
         }
