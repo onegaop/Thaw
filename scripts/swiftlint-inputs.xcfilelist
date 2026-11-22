@@ -117,6 +117,7 @@ $(SRCROOT)/Thaw/MenuBar/MenuBarItems/MenuBarItemManager/MenuBarItemManager+MoveR
 $(SRCROOT)/Thaw/MenuBar/MenuBarItems/MenuBarItemManager/MenuBarItemManager+MoveTransaction.swift
 $(SRCROOT)/Thaw/MenuBar/MenuBarItems/MenuBarItemManager/MenuBarItemManager+NotchOverflow.swift
 $(SRCROOT)/Thaw/MenuBar/MenuBarItems/MenuBarItemManager/MenuBarItemManager+OperationTimeouts.swift
+$(SRCROOT)/Thaw/MenuBar/MenuBarItems/MenuBarItemManager/MenuBarItemManager+PendingAnchor.swift
 $(SRCROOT)/Thaw/MenuBar/MenuBarItems/MenuBarItemManager/MenuBarItemManager+ProfileApply.swift
 $(SRCROOT)/Thaw/MenuBar/MenuBarItems/MenuBarItemManager/MenuBarItemManager+SavedLayoutApply.swift
 $(SRCROOT)/Thaw/MenuBar/MenuBarItems/MenuBarItemManager/MenuBarItemManager+TemporaryShow.swift
@@ -132,6 +133,7 @@ $(SRCROOT)/Thaw/MenuBar/MenuBarItems/MenuBarLiveRefreshPolicy.swift
 $(SRCROOT)/Thaw/MenuBar/MenuBarItems/MenuBarSpacer.swift
 $(SRCROOT)/Thaw/MenuBar/MenuBarItems/MenuBarSpacerManager.swift
 $(SRCROOT)/Thaw/MenuBar/MenuBarItems/PendingLedger.swift
+$(SRCROOT)/Thaw/MenuBar/MenuBarItems/PendingMoveRetries.swift
 $(SRCROOT)/Thaw/MenuBar/MenuBarItems/SourcePIDSeedStore.swift
 $(SRCROOT)/Thaw/MenuBar/MenuBarItems/StaleIdentifierLedger.swift
 $(SRCROOT)/Thaw/MenuBar/MenuBarItems/XPCSession+CancellableSend.swift

@@ -209,7 +209,7 @@ extension MenuBarItemManager {
             return
         }
 
-        if cachedIDs != itemWindowIDs {
+        if cachedIDs != itemWindowIDs || pendingMoveRetries.needsCachePass(windowIDs: itemWindowIDs) {
             // Failing lookups leave the snapshot uncommitted, so this fires every
             // poll (#933). Back off; each real attempt logs the streak.
             if let backoff = Self.controlItemLookupRetryBackoff(
@@ -220,7 +220,7 @@ extension MenuBarItemManager {
             {
                 return
             }
-            MenuBarItemManager.diagLog.debug("cacheItemsIfNeeded: window IDs changed (\(cachedIDs.count) cached vs \(itemWindowIDs.count) current), triggering recache")
+            MenuBarItemManager.diagLog.debug("cacheItemsIfNeeded: refreshing for a window change or due pending restore (\(cachedIDs.count) cached vs \(itemWindowIDs.count) current), triggering recache")
             await cacheItemsRegardless(itemWindowIDs)
             return
         }

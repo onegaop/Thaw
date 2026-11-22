@@ -639,7 +639,15 @@ final class MenuBarItemManager {
 
     /// Original sections of temporarily shown items whose apps quit before
     /// the rehide, restored on relaunch.
-    var pendingRelocations = [String: String]()
+    var pendingRelocations = [String: String]() {
+        didSet {
+            for (identifier, section) in oldValue where pendingRelocations[identifier] != section {
+                pendingMoveRetries.forget(identifier)
+            }
+        }
+    }
+
+    var pendingMoveRetries = PendingMoveRetries()
 
     /// Neighbor and side for restoring those items' ordering.
     var pendingReturnDestinations = [String: [String: String]]() // [tagIdentifier: ["neighbor": tag, "position": "left"|"right"]]

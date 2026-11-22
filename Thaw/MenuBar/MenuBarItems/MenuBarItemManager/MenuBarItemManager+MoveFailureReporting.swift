@@ -47,7 +47,7 @@ extension MenuBarItemManager {
     /// Classifies outcomes with no UI or live state, so every automatic mover
     /// applies the same failure-versus-deferral rule.
     static nonisolated func automaticMoveFailureDisposition(
-        for error: any Error
+        for error: any Error, pendingRetriesExhausted: Bool = false
     ) -> AutomaticMoveFailureDisposition {
         if error is CancellationError {
             return .deferred
@@ -58,9 +58,11 @@ extension MenuBarItemManager {
         switch error {
         case .missingItemBounds, .missingDestinationBounds, .menuTrackingActive,
              .staleDestination, .moveSuperseded, .moveEngineBusy,
-             .unsafeMovePath, .inputPauseTimedOut:
+             .inputPauseTimedOut:
             // The item, destination, or bar ownership changed; a fresh pass may still succeed.
             return .deferred
+        case .unsafeMovePath:
+            return pendingRetriesExhausted ? .report : .deferred
         case let .itemNotMovable(item):
             // A generic Control Center slot can become movable as soon as its
             // source identity resolves. A static macOS prohibition will not.
@@ -163,14 +165,15 @@ extension MenuBarItemManager {
         to destination: MoveDestination?,
         expectedSection: MenuBarSection.Name?,
         error: any Error,
-        source: String
+        source: String,
+        pendingRetriesExhausted: Bool = false
     ) async {
         guard !Task.isCancelled else { return }
         guard let appState else {
             return
         }
 
-        let disposition = Self.automaticMoveFailureDisposition(for: error)
+        let disposition = Self.automaticMoveFailureDisposition(for: error, pendingRetriesExhausted: pendingRetriesExhausted)
         let key = MenuBarItemTag.canonicalPersistentIdentifier(item.uniqueIdentifier)
         let now = Date()
         let presentationDecision = Self.automaticMoveFailurePresentationDecision(

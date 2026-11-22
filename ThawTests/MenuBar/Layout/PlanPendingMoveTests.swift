@@ -361,7 +361,7 @@ struct PlanPendingMoveTests {
     @Test("A stored neighbor takes precedence over the fallbacks")
     func storedNeighborTakesPrecedence() {
         let item = visibleItem(bundleID: "com.example.app", title: "Status", windowID: 806, x: 500)
-        let neighbor = visibleItem(bundleID: "com.example.app", title: "Other", windowID: 807, x: 600)
+        let neighbor = hiddenItem(bundleID: "com.example.app", title: "Other", windowID: 807)
         let entry = PendingLedger.PendingEntry(
             tagIdentifier: item.tag.tagIdentifier,
             kind: .section(.hidden)
@@ -420,7 +420,7 @@ struct PlanPendingMoveTests {
     @Test("A fallback neighbour is used when no destination was stored")
     func fallbackNeighbourIsUsedWhenNoDestinationWasStored() {
         let item = visibleItem(bundleID: "com.example.app", title: "Status", windowID: 910)
-        let neighbor = visibleItem(bundleID: "com.example.app", title: "Neighbour", windowID: 911, x: 600)
+        let neighbor = hiddenItem(bundleID: "com.example.app", title: "Neighbour", windowID: 911)
         let entry = PendingLedger.PendingEntry(
             tagIdentifier: item.tag.tagIdentifier,
             kind: .section(.hidden)
