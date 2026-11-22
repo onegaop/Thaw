@@ -83,6 +83,7 @@ $(SRCROOT)/Thaw/MenuBar/LayoutBar/NotchIndicatorOverlay.swift
 $(SRCROOT)/Thaw/MenuBar/MenuBarItems/AXIdentityCatalog.swift
 $(SRCROOT)/Thaw/MenuBar/MenuBarItems/AXItemActivator.swift
 $(SRCROOT)/Thaw/MenuBar/MenuBarItems/ClickReactionVerifier.swift
+$(SRCROOT)/Thaw/MenuBar/MenuBarItems/EditorDropSlot.swift
 $(SRCROOT)/Thaw/MenuBar/MenuBarItems/LayoutReconciler.swift
 $(SRCROOT)/Thaw/MenuBar/MenuBarItems/LayoutSolver.swift
 $(SRCROOT)/Thaw/MenuBar/MenuBarItems/LegacyXPCConnection.swift
@@ -107,6 +108,7 @@ $(SRCROOT)/Thaw/MenuBar/MenuBarItems/MenuBarItemManager/MenuBarItemManager+Click
 $(SRCROOT)/Thaw/MenuBar/MenuBarItems/MenuBarItemManager/MenuBarItemManager+ControlItemDiscovery.swift
 $(SRCROOT)/Thaw/MenuBar/MenuBarItems/MenuBarItemManager/MenuBarItemManager+ControlItemOrder.swift
 $(SRCROOT)/Thaw/MenuBar/MenuBarItems/MenuBarItemManager/MenuBarItemManager+DividerRecoveryPolicy.swift
+$(SRCROOT)/Thaw/MenuBar/MenuBarItems/MenuBarItemManager/MenuBarItemManager+EditorDrop.swift
 $(SRCROOT)/Thaw/MenuBar/MenuBarItems/MenuBarItemManager/MenuBarItemManager+EventHelpers.swift
 $(SRCROOT)/Thaw/MenuBar/MenuBarItems/MenuBarItemManager/MenuBarItemManager+HostRecovery.swift
 $(SRCROOT)/Thaw/MenuBar/MenuBarItems/MenuBarItemManager/MenuBarItemManager+ItemCache.swift

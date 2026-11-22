@@ -182,7 +182,8 @@ extension MenuBarItemManager {
         warpCursorAfter: Bool = true,
         preferSourceAnchoredTeleport: Bool = false,
         cursorTrace: MoveCursorTrace? = nil,
-        acceptsEndpoints: MoveEndpointCheck? = nil
+        acceptsEndpoints: MoveEndpointCheck? = nil,
+        willPostMoveEvents: (@MainActor () -> Void)? = nil
     ) async throws -> MoveEventsOutcome {
         // Outside budget.run: its post-success deadline check can throw and leak
         // the permit for the life of the process.
@@ -398,6 +399,7 @@ extension MenuBarItemManager {
 
         // The press may be down; the guard releases it if the attempt stalls.
         releaseGuard.arm()
+        willPostMoveEvents?()
         // Noted right before the first submission. The press goes out next, and
         // the armed guard can post the planned release; both pass through the
         // session event tap and move the real cursor even if the attempt fails.

@@ -31,6 +31,7 @@ the items under New and Fixed.
 ### Fixed
 
 - The Thaw Bar shows available menu bar images as soon as it opens. Missing images reserve their space while they load, and a slow return of a temporarily shown item no longer holds up the first row.
+- Dragging one item beside an offscreen neighbor in the Layout editor briefly reveals its section and verifies the requested position after the divider is restored. To drag a group to an offscreen neighbor, expand the section first.
 
 - Temporarily shown menu bar items check for a reachable return slot on their original display and keep their saved return position until they land in the correct section.
 - Quit from the menu bar can finish even when menu tracking delays cleanup.
