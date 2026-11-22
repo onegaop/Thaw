@@ -8,7 +8,7 @@
 import Cocoa
 
 extension MenuBarItemManager {
-    /// Holds the move gate until the whole editor selection has been checked against the user's original neighbor.
+    /// Places one item beside a parked editor neighbor, then verifies its position after restoring the section.
     func moveForLayoutEditor(
         items: [MenuBarItem],
         to destination: MoveDestination,
@@ -18,7 +18,9 @@ extension MenuBarItemManager {
         shouldProceed: @escaping @MainActor () -> Bool
     ) async throws {
         guard let first = items.first else { throw EventError.cannotComplete }
-        let slot = EditorDropSlot(items: items, destination: destination)
+        // Native drags commit individually. A later group member can fail after the first has moved.
+        guard items.count == 1 else { throw EventError.unsafeMovePath(first) }
+        let slot = EditorDropSlot(items: [first], destination: destination)
         let isCurrent: @MainActor () -> Bool = {
             !Task.isCancelled && shouldProceed() && self.appState?.isDraggingMenuBarItem == false
                 && EditorDropSlot.isCurrent(
@@ -30,7 +32,7 @@ extension MenuBarItemManager {
         }
         try await Self.performWithMoveGate(timeout: .seconds(2)) {
             guard isCurrent(), let appState = self.appState else { throw EventError.moveSuperseded(first) }
-            let watched = Set(items.map(\.windowID) + [destination.targetItem.windowID])
+            let watched: Set<CGWindowID> = [first.windowID, destination.targetItem.windowID]
             var frames = [CGRect]()
             @MainActor func read(_ requested: EditorDropSlot, settling sections: [MenuBarSection] = [], timeout: Duration = .seconds(2)) async throws -> EditorDropSlot.Decision {
                 let snapshot = try await self.rehideItems(on: displayID, timeout: timeout)
@@ -64,11 +66,12 @@ extension MenuBarItemManager {
             guard isCurrent() else { throw EventError.moveSuperseded(first) }
 
             var opened = [MenuBarSection]()
-            var attempted = [CGWindowID: MenuBarItem]()
+            var didPostEvents = false
             var verified = false
             @MainActor func restore() {
-                for section in opened.reversed() {
-                    section.updateControlItemState()
+                // Only these dividers were hidden before this drag. The pointer may now be on another display.
+                for section in opened.reversed() where section.desiredState == .hideSection && section.controlItem.state == .showSection {
+                    section.controlItem.state = .hideSection
                 }
                 opened.removeAll()
             }
@@ -77,10 +80,8 @@ extension MenuBarItemManager {
             self.lastMoveOperationTimestamp = .now
             defer {
                 restore()
-                if !verified {
-                    for member in attempted.values {
-                        self.noteRefusedMove(of: member)
-                    }
+                if didPostEvents, !verified {
+                    self.noteRefusedMove(of: first)
                 }
                 self.lastMoveOperationTimestamp = .now
                 self.isRevealingForRehide = false
@@ -91,8 +92,11 @@ extension MenuBarItemManager {
                 let names: [MenuBarSection.Name] = section == .alwaysHidden ? [.hidden, .alwaysHidden] : [.hidden]
                 let sections = names.compactMap { appState.menuBarManager.section(withName: $0) }
                 guard sections.count == names.count, sections.allSatisfy(\.isEnabled) else { throw EventError.unsafeMovePath(first) }
-                opened = sections.filter { $0.controlItem.state == .hideSection }
-                guard !opened.isEmpty else { throw EventError.unsafeMovePath(first) }
+                let collapsed = sections.filter { $0.controlItem.state == .hideSection }
+                guard !collapsed.isEmpty, collapsed.allSatisfy({ $0.desiredState == .hideSection }) else {
+                    throw EventError.unsafeMovePath(first)
+                }
+                opened = collapsed
                 for section in opened {
                     section.controlItem.state = .showSection
                 }
@@ -107,28 +111,21 @@ extension MenuBarItemManager {
             }
             guard decision == .move || decision == .placed else { throw EventError.unsafeMovePath(first) }
             if decision == .move {
-                // Inserting each member against the same neighbor preserves the original anchor for every gesture.
-                let sequence = switch destination {
-                case .leftOfItem: items
-                case .rightOfItem: Array(items.reversed())
-                }
                 let checksTarget = self.returnEndpointCheck(for: section, destination: destination, on: displayID)
-                for item in sequence {
-                    guard isCurrent() else { throw EventError.moveSuperseded(item) }
-                    try await self.move(
-                        item: item,
-                        to: destination,
-                        on: displayID,
-                        skipInputPause: true,
-                        options: .init(
-                            watchdogTimeout: Self.layoutWatchdogTimeout,
-                            shouldProceed: isCurrent,
-                            acceptsEndpoints: { endpoints, display in isCurrent() && checksTarget(endpoints, display) },
-                            willPostMoveEvents: { attempted[item.windowID] = item },
-                            isUserInitiated: true
-                        )
+                guard isCurrent() else { throw EventError.moveSuperseded(first) }
+                try await self.move(
+                    item: first,
+                    to: destination,
+                    on: displayID,
+                    skipInputPause: true,
+                    options: .init(
+                        watchdogTimeout: Self.layoutWatchdogTimeout,
+                        shouldProceed: isCurrent,
+                        acceptsEndpoints: { endpoints, display in isCurrent() && checksTarget(endpoints, display) },
+                        willPostMoveEvents: { didPostEvents = true },
+                        isUserInitiated: true
                     )
-                }
+                )
             }
             let changedSections = opened
             restore()

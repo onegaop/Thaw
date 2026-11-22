@@ -158,6 +158,31 @@ struct EditorDropSlotTests {
     }
 
     @MainActor
+    @Test("A parked neighbor rejects a group before the first member can move")
+    func refusesGroupBeforeAdmission() async {
+        let manager = MenuBarItemManager()
+        let first = item(1, at: 1200)
+        let missingSecond = item(2, at: 1240)
+        let anchor = item(3, at: -4065, onScreen: false)
+        do {
+            try await manager.moveForLayoutEditor(
+                items: [first, missingSecond], to: .leftOfItem(anchor), in: .hidden, on: 1, spaceID: 2,
+                shouldProceed: {
+                    Issue.record("Unsupported group reached move admission")
+                    return false
+                }
+            )
+            Issue.record("Unsupported group completed")
+        } catch MenuBarItemManager.EventError.unsafeMovePath(let rejected) {
+            #expect(rejected == first)
+        } catch {
+            Issue.record("Unexpected group rejection: \(error)")
+        }
+        #expect(!manager.isRevealingForRehide)
+        #expect(manager.lastMoveOperationTimestamp == nil)
+    }
+
+    @MainActor
     @Test("A superseded editor drag stops at admission before native enumeration or reveal")
     func rejectsSupersededGeneration() async {
         let manager = MenuBarItemManager()

@@ -269,13 +269,13 @@ final class LayoutBarPaddingView: NSView {
     }
 
     private func moveToParkedNeighbor(
-        items: [MenuBarItem],
+        item: MenuBarItem,
         destination: MenuBarItemManager.MoveDestination,
         on displayID: CGDirectDisplayID,
         sourceContainer: LayoutBarContainer?,
         appState: AppState
     ) {
-        guard !isStabilizing, let first = items.first else {
+        guard !isStabilizing else {
             container.resumeArrangedViewUpdatesWithoutAnimation()
             sourceContainer?.resumeArrangedViewUpdatesWithoutAnimation()
             return
@@ -297,7 +297,7 @@ final class LayoutBarPaddingView: NSView {
                 try await Task.sleep(for: .milliseconds(150))
                 guard stillEditing() else { throw CancellationError() }
                 try await manager.moveForLayoutEditor(
-                    items: items,
+                    items: [item],
                     to: destination,
                     in: section,
                     on: displayID,
@@ -305,9 +305,7 @@ final class LayoutBarPaddingView: NSView {
                     shouldProceed: stillEditing
                 )
                 if stillEditing() {
-                    for item in items {
-                        manager.removeTemporarilyShownItemFromCache(with: item.tag)
-                    }
+                    manager.removeTemporarilyShownItemFromCache(with: item.tag)
                     manager.recordExternalMoveOperation()
                     confirmed = true
                 }
@@ -329,7 +327,7 @@ final class LayoutBarPaddingView: NSView {
             guard await resetStabilizingStateIfNeeded(generation: generation, sourceContainer: sourceContainer) else { return }
             if let failure, shouldReport, let window {
                 let report = await MoveFailureDiagnosticReport.generate(
-                    for: .init(item: first, destination: destination, expectedSection: section, error: failure),
+                    for: .init(item: item, destination: destination, expectedSection: section, error: failure),
                     appState: appState
                 )
                 if window.isVisible, stabilizationGeneration == generation {
@@ -361,8 +359,19 @@ final class LayoutBarPaddingView: NSView {
             let display = CGDisplayBounds(displayID)
             let live = Bridging.getWindowBounds(for: destination.targetItem.windowID)
             if Self.needsParkedEditorMove(to: destination, liveBounds: live, on: display) {
+                guard items.count <= 1 else {
+                    container.resumeArrangedViewUpdatesWithoutAnimation()
+                    sourceContainer?.resumeArrangedViewUpdatesWithoutAnimation()
+                    if let window {
+                        let alert = NSAlert()
+                        alert.messageText = String(localized: "Expand the section to move this group.")
+                        alert.informativeText = String(localized: "Once the destination item is visible in the menu bar, drag the group again.")
+                        alert.beginSheetModal(for: window)
+                    }
+                    return
+                }
                 moveToParkedNeighbor(
-                    items: items.isEmpty ? [draggedItem] : items,
+                    item: draggedItem,
                     destination: destination,
                     on: displayID,
                     sourceContainer: sourceContainer,
