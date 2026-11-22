@@ -181,7 +181,8 @@ extension MenuBarItemManager {
         budget: MoveTransactionBudget,
         warpCursorAfter: Bool = true,
         preferSourceAnchoredTeleport: Bool = false,
-        cursorTrace: MoveCursorTrace? = nil
+        cursorTrace: MoveCursorTrace? = nil,
+        acceptsEndpoints: MoveEndpointCheck? = nil
     ) async throws -> MoveEventsOutcome {
         // Outside budget.run: its post-success deadline check can throw and leak
         // the permit for the life of the process.
@@ -203,7 +204,8 @@ extension MenuBarItemManager {
         let initialEndpoints = try await resolveCurrentMoveEndpoints(
             source: item,
             destination: destination.targetItem,
-            on: displayID
+            on: displayID,
+            acceptsEndpoints: acceptsEndpoints
         )
         let initialDestination = initialEndpoints.destination(matching: destination)
         let initialGeometry = try validateMoveEndpointGeometry(
@@ -305,7 +307,8 @@ extension MenuBarItemManager {
         let endpoints = try await resolveCurrentMoveEndpoints(
             source: item,
             destination: destination.targetItem,
-            on: displayID
+            on: displayID,
+            acceptsEndpoints: acceptsEndpoints
         )
         let liveItem = endpoints.source
         let liveDestination = endpoints.destination(matching: destination)
@@ -413,7 +416,8 @@ extension MenuBarItemManager {
                         openingEvent: mouseDown,
                         releaseGuard: releaseGuard,
                         cursorTrace: cursorTrace,
-                        displayBounds: displayBounds
+                        displayBounds: displayBounds,
+                        acceptsEndpoints: acceptsEndpoints
                     ),
                     timeout: timeout,
                     destination: destination,
@@ -440,7 +444,8 @@ extension MenuBarItemManager {
                 let releaseEndpoints = try await resolveCurrentMoveEndpoints(
                     source: item,
                     destination: destination.targetItem,
-                    on: displayID
+                    on: displayID,
+                    acceptsEndpoints: acceptsEndpoints
                 )
                 _ = try validateMoveEndpointGeometry(
                     item: releaseEndpoints.source,
@@ -559,6 +564,7 @@ extension MenuBarItemManager {
         /// Records each point posted through the session event tap.
         let cursorTrace: MoveCursorTrace?
         let displayBounds: [CGRect]
+        let acceptsEndpoints: MoveEndpointCheck?
     }
 
     /// Always releases on the bar before propagating a failure.
@@ -635,7 +641,8 @@ extension MenuBarItemManager {
         let releaseEndpoints = try await resolveCurrentMoveEndpoints(
             source: item,
             destination: destination.targetItem,
-            on: displayID
+            on: displayID,
+            acceptsEndpoints: drag.acceptsEndpoints
         )
         _ = try validateMoveEndpointGeometry(
             item: releaseEndpoints.source,

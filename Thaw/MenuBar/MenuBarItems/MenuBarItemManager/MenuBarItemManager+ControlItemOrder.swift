@@ -317,6 +317,7 @@ extension MenuBarItemManager {
     /// change detector can't see.
     func relocatePendingItems(
         _ items: [MenuBarItem],
+        on displayID: CGDirectDisplayID?,
         controlItems: ControlItemPair,
         shouldBeginMove: (@MainActor () -> Bool)? = nil
     ) async -> CacheDrivenMoveOutcome {
@@ -328,7 +329,7 @@ extension MenuBarItemManager {
             return .noAttempt
         }
 
-        guard !pendingRelocations.isEmpty else {
+        guard let displayID, !pendingRelocations.isEmpty else {
             return .noAttempt
         }
 
@@ -347,9 +348,11 @@ extension MenuBarItemManager {
             controlItems: controlItems,
             hiddenBounds: hiddenBounds,
             boundsForWindowID: boundsForWindowID,
-            activelyShownTags: activelyShownTags
+            activelyShownTags: activelyShownTags,
+            alwaysHiddenEnabled: appState?.settings.advanced.enableAlwaysHiddenSection ?? true
         )
 
+        let placementItems = bar.itemsIncludingDividers
         var fallbackNeighborByTagIdentifier = [String: MenuBarItemTag]()
         for context in temporarilyShownItemContexts {
             if let neighbor = context.fallbackNeighbor?.tag {
@@ -375,7 +378,8 @@ extension MenuBarItemManager {
         for tagIdentifier in allTagIdentifiers {
             guard let rawSectionString = pendingRelocations[tagIdentifier] else { continue }
 
-            let entry: PendingLedger.PendingEntry
+            var entry: PendingLedger.PendingEntry
+            var sentinelPlacement: RehidePlacement?
             if let sentinel = parseWaitForRelaunch(rawSectionString) {
                 entry = PendingLedger.PendingEntry(
                     tagIdentifier: tagIdentifier,
@@ -398,22 +402,23 @@ extension MenuBarItemManager {
                     fallbackNeighbors: fallbackNeighborByTagIdentifier
                 ),
                 now: Date(),
-                sentinelAgeCap: MenuBarItemManager.waitForRelaunchAgeCap
+                sentinelAgeCap: MenuBarItemManager.waitForRelaunchAgeCap,
+                placement: sentinelPlacement
             )
 
             // Rewrite the sentinel to its section, persist, and re-run the planner.
             if case let .promoteWaitForRelaunch(promotedSection) = decision {
                 if let item = items.first(where: { entry.tagIdentifier == $0.tag.tagIdentifier }) {
                     MenuBarItemManager.diagLog.info(
-                        "relocatePendingItems: \(item.logString) has new windowID; clearing waitForRelaunch sentinel"
+                        "relocatePendingItems: \(item.logString) can resume a pending return; clearing waitForRelaunch sentinel"
                     )
                 }
                 pendingRelocations[tagIdentifier] = sectionKey(for: promotedSection)
                 persistPendingRelocations()
 
-                let promotedEntry = PendingLedger.PendingEntry(tagIdentifier: tagIdentifier, kind: .section(promotedSection))
+                entry = PendingLedger.PendingEntry(tagIdentifier: tagIdentifier, kind: .section(promotedSection))
                 decision = PendingLedger.planPendingMove(
-                    entry: promotedEntry,
+                    entry: entry,
                     bar: bar,
                     returnInfo: PendingLedger.PendingReturnInfo(
                         destinations: pendingReturnDestinations,
@@ -425,19 +430,22 @@ extension MenuBarItemManager {
             }
 
             switch decision {
-            case let .move(item, destination):
+            case let .move(item, planned):
                 // The recorder outlives the loop; a stale true would misreport
                 // this preflight rejection as a failed accepted move.
                 attemptRecorder.didAcceptCurrentMove = false
-                let targetSection: MenuBarSection.Name = {
-                    if case let .section(section) = entry.kind {
-                        return section
-                    }
-                    if case let .waitForRelaunch(_, section, _) = entry.kind {
-                        return section
-                    }
-                    return .hidden
-                }()
+                let anchors = placementItems.filter { $0.windowID != item.windowID }
+                guard case let .section(targetSection) = entry.kind,
+                      !failureLedger.isUnderBackoff(for: item),
+                      let placement = rehidePlacement(for: targetSection, on: displayID),
+                      let destination = placement.destination(primary: planned, alternate: nil, in: anchors)
+                else { continue }
+                let targetKey = sectionKey(for: targetSection)
+                let returnInfo = pendingReturnDestinations[tagIdentifier]
+                @MainActor func stillPending() -> Bool {
+                    pendingRelocations[tagIdentifier] == targetKey && pendingReturnDestinations[tagIdentifier] == returnInfo &&
+                        !temporarilyShownItemContexts.contains { $0.tag.tagIdentifier == tagIdentifier }
+                }
                 MenuBarItemManager.diagLog.info(
                     """
                     Relocating \(item.logString) back to \
@@ -448,19 +456,31 @@ extension MenuBarItemManager {
                     try await move(
                         item: item,
                         to: destination,
+                        on: displayID,
                         skipInputPause: true,
-                        options: .init(shouldBegin: {
-                            let shouldBegin = beginMove?() ?? true
-                            if shouldBegin {
-                                attemptRecorder.didAcceptMoveAttempt = true
-                                attemptRecorder.didAcceptCurrentMove = true
-                            }
-                            return shouldBegin
-                        })
+                        options: .init(
+                            maxMoveAttempts: 2,
+                            shouldProceed: stillPending,
+                            shouldBegin: {
+                                let shouldBegin = stillPending() && (beginMove?() ?? true)
+                                if shouldBegin {
+                                    attemptRecorder.didAcceptMoveAttempt = true
+                                    attemptRecorder.didAcceptCurrentMove = true
+                                }
+                                return shouldBegin
+                            },
+                            acceptsEndpoints: returnEndpointCheck(for: targetSection, destination: destination, on: displayID, shouldProceed: stillPending)
+                        )
                     )
+                    didCompleteMove = true
+                    let landedItems = await MenuBarItem.getMenuBarItems(on: displayID, option: .activeSpace)
+                    guard let landed = landedItems.first(where: { Self.moveEndpointIsCurrent($0, expected: item) }),
+                          let current = rehidePlacement(for: targetSection, on: displayID),
+                          current.contains(landed, in: landedItems),
+                          stillPending()
+                    else { continue }
                     pendingRelocations.removeValue(forKey: tagIdentifier)
                     pendingReturnDestinations.removeValue(forKey: tagIdentifier)
-                    didCompleteMove = true
                 } catch EventError.moveSuperseded {
                     didFailAcceptedMove = didFailAcceptedMove || attemptRecorder.didAcceptCurrentMove
                     MenuBarItemManager.diagLog.debug(
@@ -469,6 +489,9 @@ extension MenuBarItemManager {
                     persistPendingRelocations()
                     return outcome()
                 } catch {
+                    if case EventError.dropReverted = error {
+                        failureLedger.recordFailure(for: item, kind: .other)
+                    }
                     didFailAcceptedMove = didFailAcceptedMove || attemptRecorder.didAcceptCurrentMove
                     MenuBarItemManager.diagLog.error(
                         """
@@ -486,6 +509,12 @@ extension MenuBarItemManager {
                 }
 
             case .clearEntry:
+                if case let .section(section) = entry.kind, section != .visible {
+                    guard let placement = rehidePlacement(for: section, on: displayID),
+                          let item = items.first(where: { $0.tag.tagIdentifier == tagIdentifier }),
+                          placement.contains(item, in: placementItems)
+                    else { continue }
+                }
                 pendingRelocations.removeValue(forKey: tagIdentifier)
                 pendingReturnDestinations.removeValue(forKey: tagIdentifier)
 
@@ -509,6 +538,24 @@ extension MenuBarItemManager {
 
         persistPendingRelocations()
         return outcome()
+    }
+
+    func returnEndpointCheck(
+        for section: MenuBarSection.Name,
+        destination: MoveDestination,
+        on expectedDisplay: CGDirectDisplayID,
+        shouldProceed: (@MainActor () -> Bool)? = nil
+    ) -> MoveEndpointCheck {
+        let space = Bridging.getActiveSpaceID()
+        return { [weak self] endpoints, displayID in
+            guard shouldProceed?() != false,
+                  displayID == expectedDisplay,
+                  Bridging.getActiveMenuBarDisplayID() == displayID,
+                  Bridging.getActiveSpaceID() == space,
+                  let current = self?.rehidePlacement(for: section, on: displayID)
+            else { return false }
+            return current.allows(endpoints.destination(matching: destination), in: endpoints.snapshot)
+        }
     }
 
     private func bestBounds(for item: MenuBarItem) -> CGRect {

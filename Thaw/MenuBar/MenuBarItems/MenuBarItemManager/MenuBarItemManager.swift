@@ -191,6 +191,8 @@ final class MenuBarItemManager {
 
     /// Contexts for temporarily shown menu bar items.
     var temporarilyShownItemContexts = [TemporarilyShownItemContext]()
+    var isRehidingTemporarilyShownItems = false
+    var isRevealingForRehide = false
 
     /// A timer for rehiding temporarily shown menu bar items.
     var rehideTimer: Timer?

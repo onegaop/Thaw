@@ -305,6 +305,8 @@ extension MenuBarItemManager {
         }
     }
 
+    typealias MoveEndpointCheck = @MainActor (CurrentMoveEndpoints, CGDirectDisplayID) -> Bool
+
     nonisolated enum MoveEndpointResolutionError: Error, Equatable {
         case missingSource
         case missingDestination
@@ -407,14 +409,15 @@ extension MenuBarItemManager {
         source expectedSource: MenuBarItem,
         destination expectedDestination: MenuBarItem,
         on displayID: CGDirectDisplayID,
-        requiresFullSnapshot: Bool = false
+        requiresFullSnapshot: Bool = false,
+        acceptsEndpoints: MoveEndpointCheck? = nil
     ) async throws -> CurrentMoveEndpoints {
         let endpoints = await MenuBarItem.refreshMoveEndpoints([
             expectedSource,
             expectedDestination,
         ])
         let items: [MenuBarItem]
-        if requiresFullSnapshot {
+        if requiresFullSnapshot || acceptsEndpoints != nil {
             let geometrySnapshot = await MenuBarItem.getMenuBarItems(
                 on: displayID,
                 option: .activeSpace,
@@ -438,6 +441,9 @@ extension MenuBarItemManager {
             expectedDestination: expectedDestination
         ) {
         case let .success(endpoints):
+            guard acceptsEndpoints?(endpoints, displayID) != false else {
+                throw EventError.unsafeMovePath(expectedSource)
+            }
             return endpoints
         case .failure(.missingSource):
             throw EventError.missingItemBounds(expectedSource)

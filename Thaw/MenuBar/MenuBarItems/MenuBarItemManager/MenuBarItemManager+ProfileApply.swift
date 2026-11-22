@@ -1788,8 +1788,7 @@ extension MenuBarItemManager {
             )
 
             // A visible-bound item anchored on a parked item gets stranded off screen,
-            // and the next move chains off it (#1027). Concealed sections are
-            // parked by design, so only visible-bound moves are gated.
+            // and the next move chains off it (#1027).
             // Skipping counts as unenacted, which withholds the save.
             if fallbackSection == .visible {
                 let screenFrames = NSScreen.screens.map { CGDisplayBounds($0.displayID) }
@@ -1802,16 +1801,42 @@ extension MenuBarItemManager {
                 }
             }
 
+            var returnCheck: MoveEndpointCheck?
+            var returnDisplay: CGDirectDisplayID?
+            if automatic, source == .savedOrder, fallbackSection != .visible {
+                guard let displayID = Bridging.getActiveMenuBarDisplayID(),
+                      let placement = rehidePlacement(for: fallbackSection, on: displayID),
+                      placement.allows(dest, in: allFreshItems)
+                else {
+                    unenactedMoveCount += 1
+                    continue
+                }
+                returnDisplay = displayID
+                returnCheck = returnEndpointCheck(for: fallbackSection, destination: dest, on: displayID)
+            }
+
             do {
                 try await move(
                     item: item,
                     to: dest,
+                    on: returnDisplay,
                     skipInputPause: true,
                     options: .init(
                         shouldBegin: shouldBeginBatchMove,
+                        acceptsEndpoints: returnCheck,
                         didFinishWhileHoldingGate: didFinishBatchMove
                     )
                 )
+                if let returnDisplay {
+                    let landedItems = await MenuBarItem.getMenuBarItems(on: returnDisplay, option: .activeSpace)
+                    guard let landed = landedItems.first(where: { Self.moveEndpointIsCurrent($0, expected: item) }),
+                          let placement = rehidePlacement(for: fallbackSection, on: returnDisplay),
+                          placement.contains(landed, in: landedItems)
+                    else {
+                        unenactedMoveCount += 1
+                        continue
+                    }
+                }
                 movedCount += 1
                 consecutiveMoveFailures = 0
                 failureLedger.recordSuccess(for: item)

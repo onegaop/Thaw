@@ -62,6 +62,13 @@ nonisolated enum PendingLedger {
     struct PendingReturnInfo: Equatable {
         let destinations: [String: [String: String]]
         let fallbackNeighbors: [String: MenuBarItemTag]
+
+        func savedDestination(for identifier: String, in items: [MenuBarItem]) -> MenuBarItemManager.MoveDestination? {
+            guard let saved = destinations[identifier], let tag = saved["neighbor"],
+                  let neighbor = items.first(where: { $0.tag.tagIdentifier == tag })
+            else { return nil }
+            return saved["position"] == "left" ? .leftOfItem(neighbor) : .rightOfItem(neighbor)
+        }
     }
 
     /// The bar as observed this cycle, read once and shared by every entry.
@@ -71,8 +78,16 @@ nonisolated enum PendingLedger {
         let hiddenBounds: CGRect
         /// Live bounds, which win over an item's cached bounds.
         let boundsForWindowID: [CGWindowID: CGRect]
+        /// Control discovery removes these windows from the list passed to the cache planner.
+        var itemsIncludingDividers: [MenuBarItem] {
+            let dividers = [controlItems.hidden, controlItems.alwaysHidden].compactMap(\.self)
+            let dividerIDs = Set(dividers.map(\.windowID))
+            return items.filter { !dividerIDs.contains($0.windowID) } + dividers
+        }
+
         /// Tags the rehide flow currently owns.
         let activelyShownTags: Set<String>
+        var alwaysHiddenEnabled = true
     }
 
     // MARK: - Planner
@@ -84,7 +99,8 @@ nonisolated enum PendingLedger {
         bar: BarState,
         returnInfo: PendingReturnInfo,
         now: Date = Date(),
-        sentinelAgeCap: Duration? = nil
+        sentinelAgeCap: Duration? = nil,
+        placement: RehidePlacement? = nil
     ) -> PendingMove {
         let items = bar.items
         let controlItems = bar.controlItems
@@ -112,6 +128,17 @@ nonisolated enum PendingLedger {
                     let ageSeconds = Int64(now.timeIntervalSince(setAt).rounded())
                     return ageSeconds >= sentinelAgeCap.components.seconds
                 }()
+                if let placement {
+                    let itemsWithDividers = bar.itemsIncludingDividers
+                    if placement.contains(item, in: itemsWithDividers) {
+                        return .promoteWaitForRelaunch(section: sentinelSection)
+                    }
+                    if item.isOnScreen, placement.display.contains(item.bounds.center),
+                       let neighbor = returnInfo.savedDestination(for: entry.tagIdentifier, in: items),
+                       placement.allows(neighbor, in: itemsWithDividers) {
+                        return .promoteWaitForRelaunch(section: sentinelSection)
+                    }
+                }
                 if isStale {
                     return .promoteWaitForRelaunch(section: sentinelSection)
                 }
@@ -134,18 +161,14 @@ nonisolated enum PendingLedger {
 
         // Already hidden: clear the entry.
         let itemBounds = boundsForWindowID[item.windowID] ?? item.bounds
-        guard itemBounds.minX >= hiddenBounds.maxX else {
+        let alwaysHiddenBounds = controlItems.alwaysHidden.map { boundsForWindowID[$0.windowID] ?? $0.bounds }
+        let target: MenuBarItemManager.LayoutResetTarget = targetSection == .alwaysHidden && bar.alwaysHiddenEnabled ? .alwaysHidden : .hidden
+        if target.contains(itemBounds: itemBounds, hiddenBounds: hiddenBounds, alwaysHiddenBounds: alwaysHiddenBounds) {
             return .clearEntry
         }
 
         // Stored neighbor, then fallback neighbor, then section boundary.
-        if let destInfo = returnInfo.destinations[entry.tagIdentifier],
-           let neighborTagString = destInfo["neighbor"],
-           let neighborItem = items.first(where: { neighborTagString == $0.tag.tagIdentifier })
-        {
-            let destination: MenuBarItemManager.MoveDestination = destInfo["position"] == "left"
-                ? .leftOfItem(neighborItem)
-                : .rightOfItem(neighborItem)
+        if let destination = returnInfo.savedDestination(for: entry.tagIdentifier, in: items) {
             return .move(item: item, destination: destination)
         }
 

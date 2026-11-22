@@ -117,6 +117,62 @@ struct PlanPendingMoveTests {
         }
     }
 
+    @Test("A legacy wait-for-relaunch record can resume when its saved hidden neighbor becomes reachable")
+    func oldSentinelResumesOnReachableNeighbor() {
+        let source = visibleItem(bundleID: "com.example.source", title: "Status", windowID: 901)
+        let anchor = hiddenItem(bundleID: "com.example.anchor", title: "Status", windowID: 902)
+        let entry = PendingLedger.PendingEntry(tagIdentifier: source.tag.tagIdentifier, kind: .waitForRelaunch(windowID: 901, section: .hidden, setAt: .now))
+        let saved = PendingLedger.PendingReturnInfo(destinations: [entry.tagIdentifier: ["position": "left", "neighbor": anchor.tag.tagIdentifier]], fallbackNeighbors: [:])
+        let bar = PendingLedger.BarState(items: [source, anchor], controlItems: pair(), hiddenBounds: hiddenBounds, boundsForWindowID: [:], activelyShownTags: [])
+        let placement = RehidePlacement(section: .hidden, display: CGRect(x: 0, y: 0, width: 900, height: 600), reservedNotch: nil, alwaysHiddenEnabled: true)
+        #expect(PendingLedger.planPendingMove(entry: entry, bar: bar, returnInfo: saved, placement: placement) == .promoteWaitForRelaunch(section: .hidden))
+    }
+
+    @Test("A former always-hidden item already in hidden finishes without a gesture when the section is disabled")
+    func disabledAlwaysHiddenReturnAlreadyLanded() {
+        let item = hiddenItem(bundleID: "com.example.item", title: "Status", windowID: 902)
+        let bar = PendingLedger.BarState(
+            items: [item], controlItems: .fixture(hiddenAt: hiddenBounds), hiddenBounds: hiddenBounds,
+            boundsForWindowID: [:], activelyShownTags: [], alwaysHiddenEnabled: false
+        )
+        let decision = PendingLedger.planPendingMove(
+            entry: .init(tagIdentifier: item.tag.tagIdentifier, kind: .section(.alwaysHidden)),
+            bar: bar,
+            returnInfo: .init(destinations: [:], fallbackNeighbors: [:])
+        )
+        #expect(decision == .clearEntry)
+    }
+
+    @Test("A cache pass restores the discovered dividers before testing a pending return slot")
+    func cachePassWithDividersRemoved() {
+        let controls = pair()
+        let neighbor = hiddenItem(bundleID: "com.example.neighbor", title: "Status", windowID: 905)
+        let placement = RehidePlacement(
+            section: .hidden, display: CGRect(x: 0, y: 0, width: 1000, height: 600),
+            reservedNotch: nil, alwaysHiddenEnabled: true
+        )
+        let bar = PendingLedger.BarState(
+            items: [neighbor], controlItems: controls, hiddenBounds: hiddenBounds,
+            boundsForWindowID: [:], activelyShownTags: []
+        )
+        #expect(!placement.allows(.leftOfItem(neighbor), in: bar.items))
+        #expect(placement.allows(.leftOfItem(neighbor), in: bar.itemsIncludingDividers))
+    }
+
+    @Test("Being left of the visible section does not finish a return to a different hidden section")
+    func wrongConcealedSectionKeepsPending() {
+        let item = hiddenItem(bundleID: "com.example.item", title: "Status", windowID: 900, x: 20)
+        let result = planWithDefaults(
+            entry: .init(tagIdentifier: item.tag.tagIdentifier, kind: .section(.hidden)),
+            items: [item],
+            controlItems: pair()
+        )
+        guard case .move = result else {
+            Issue.record("An item in always-hidden still needs its return to hidden")
+            return
+        }
+    }
+
     @Test("A standard entry whose item is already hidden clears the entry")
     func standardEntryAlreadyHiddenClearsEntry() {
         let item = hiddenItem(bundleID: "com.example.app", title: "Status", windowID: 801)

@@ -43,14 +43,19 @@ extension MenuBarItemManager {
         /// The window of the item's shown interface.
         var shownInterfaceWindow: WindowInfo?
 
-        /// The number of attempts that have been made to rehide the item.
-        var rehideAttempts = 0
+        let shownWindowID: CGWindowID
+        let shownSpaceID: CGSSpaceID
+        var didRevealForRehide = false
+
+        var isOnActiveBar: Bool {
+            Bridging.getActiveSpaceID() == shownSpaceID && Bridging.getActiveMenuBarDisplayID() == displayID
+        }
 
         /// When the item's menu was first seen closed since its last
         /// interaction. The user's hide-again delay counts from here.
         var closedSince: Date?
 
-        /// Separate from rehideAttempts to allow more retries: the app may
+        /// The app may
         /// be on another space or briefly invisible.
         var notFoundAttempts = 0
 
@@ -90,9 +95,7 @@ extension MenuBarItemManager {
         /// What is currently known about the item's interface.
         var interfaceState: InterfaceState {
             // The tracked popup window is the most reliable signal.
-            if let window = shownInterfaceWindow,
-               let current = WindowInfo(windowID: window.windowID)
-            {
+            if let window = shownInterfaceWindow, let current = WindowInfo(windowID: window.windowID) {
                 if current.layer == CGWindowLevelForKey(.popUpMenuWindow)
                     || current.layer == CGWindowLevelForKey(.popUpMenuWindow) - 1
                     || current.layer == CGWindowLevelForKey(.statusWindow)
@@ -145,6 +148,8 @@ extension MenuBarItemManager {
             sourcePID: pid_t,
             interfacePIDs: Set<pid_t>,
             displayID: CGDirectDisplayID,
+            shownWindowID: CGWindowID,
+            shownSpaceID: CGSSpaceID,
             returnDestination: MoveDestination,
             fallbackNeighbor: (tag: MenuBarItemTag, pid: pid_t)?,
             originalSection: MenuBarSection.Name
@@ -153,6 +158,8 @@ extension MenuBarItemManager {
             self.sourcePID = sourcePID
             self.interfacePIDs = interfacePIDs
             self.displayID = displayID
+            self.shownWindowID = shownWindowID
+            self.shownSpaceID = shownSpaceID
             self.returnDestination = returnDestination
             self.fallbackNeighbor = fallbackNeighbor
             self.originalSection = originalSection
@@ -348,9 +355,7 @@ extension MenuBarItemManager {
         let deadline = ContinuousClock.now + timeout
         while ContinuousClock.now < deadline {
             await eventSleep(for: pollInterval)
-            if let currentOrigin = Bridging.getWindowBounds(for: item.windowID)?.origin,
-               currentOrigin != previousOrigin
-            {
+            if let currentOrigin = Bridging.getWindowBounds(for: item.windowID)?.origin, currentOrigin != previousOrigin {
                 return
             }
         }
@@ -440,24 +445,6 @@ extension MenuBarItemManager {
             rehideTimer?.invalidate()
             rehideCancellable?.cancel()
             await rehideTemporarilyShownItems(force: true, isCalledFromTemporarilyShow: true)
-
-            // Only failed moves count as stuck. Not-found items are just on
-            // another space; bailing on them would strand them.
-            let stuckItems = temporarilyShownItemContexts.filter {
-                !$0.tag.matchesIgnoringWindowID(item.tag) && $0.rehideAttempts > 0
-            }
-            if !stuckItems.isEmpty {
-                MenuBarItemManager.diagLog.error(
-                    """
-                    temporarilyShow: aborting; \(stuckItems.count) item(s) still stuck \
-                    after force-rehide: \(stuckItems.map(\.tag)). \
-                    Avoiding further semaphore saturation.
-                    """
-                )
-                // Re-arm so stuck contexts are retried.
-                runRehideTimer()
-                return .showFailed
-            }
 
             if temporarilyShownItemContexts.contains(where: { $0.tag.matchesIgnoringWindowID(item.tag) }) {
                 // A fast double click; replace the old context.
@@ -562,6 +549,8 @@ extension MenuBarItemManager {
             sourcePID: item.sourcePID ?? item.ownerPID,
             interfacePIDs: Set([item.ownerPID, item.sourcePID].compactMap(\.self)),
             displayID: resolvedDisplayID,
+            shownWindowID: item.windowID,
+            shownSpaceID: Bridging.getActiveSpaceID(),
             returnDestination: returnInfo.destination,
             fallbackNeighbor: returnInfo.fallbackNeighbor,
             originalSection: originalSection
@@ -643,57 +632,6 @@ extension MenuBarItemManager {
         return .movedAndClicked
     }
 
-    /// Resolves the best move destination for returning a temporarily shown
-    /// item to its original section.
-    ///
-    /// Tries TemporarilyShownItemContext/returnDestination, then
-    /// TemporarilyShownItemContext/fallbackNeighbor, then the original
-    /// section's control item.
-    private func resolveReturnDestination(
-        for context: TemporarilyShownItemContext,
-        in items: [MenuBarItem]
-    ) -> MoveDestination? {
-        // Re-wrap with the fresh item so the move uses current bounds.
-        let targetTag = context.returnDestination.targetItem.tag
-        let targetPID = context.returnDestination.targetItem.sourcePID ?? context.returnDestination.targetItem.ownerPID
-        if let freshTarget = items.first(matchingTag: targetTag, pid: targetPID) {
-            switch context.returnDestination {
-            case .leftOfItem:
-                return .leftOfItem(freshTarget)
-            case .rightOfItem:
-                return .rightOfItem(freshTarget)
-            }
-        }
-
-        if let fallbackNeighbor = context.fallbackNeighbor,
-           let freshFallback = items.first(matchingTag: fallbackNeighbor.tag, pid: fallbackNeighbor.pid)
-        {
-            switch context.returnDestination {
-            case .leftOfItem:
-                return .rightOfItem(freshFallback)
-            case .rightOfItem:
-                return .leftOfItem(freshFallback)
-            }
-        }
-
-        MenuBarItemManager.diagLog.debug(
-            """
-            Return destination neighbors not found for \(context.tag); \
-            falling back to section-level destination for \(context.originalSection.logString)
-            """
-        )
-        guard let destination = sectionDestination(for: context.originalSection, in: items) else {
-            MenuBarItemManager.diagLog.error(
-                """
-                No section destination to resolve return destination for \
-                \(context.tag) in \(context.originalSection.logString)
-                """
-            )
-            return nil
-        }
-        return destination
-    }
-
     /// Rehides all temporarily shown items.
     ///
     /// force: If true, skip the interface-showing and
@@ -703,19 +641,26 @@ extension MenuBarItemManager {
             MenuBarItemManager.diagLog.error("Missing AppState, so not rehiding")
             return
         }
-        guard !temporarilyShownItemContexts.isEmpty else {
+        guard !isRehidingTemporarilyShownItems else { return }
+        temporarilyShownItemContexts.removeAll { pendingRelocations[$0.tag.tagIdentifier] == nil }
+        guard !temporarilyShownItemContexts.isEmpty else { return }
+        let currentContexts = temporarilyShownItemContexts.filter(\.isOnActiveBar)
+        guard !currentContexts.isEmpty else {
+            runRehideTimer(for: 3)
             return
         }
+        isRehidingTemporarilyShownItems = true
+        defer { isRehidingTemporarilyShownItems = false }
 
         MenuBarItemManager.diagLog.debug("rehideTemporarilyShownItems: started (force=\(force), isCalledFromTemporarilyShow=\(isCalledFromTemporarilyShow))")
 
         if !force {
             // interfaceState can enumerate every window; evaluate it once.
-            let interfaceStates = temporarilyShownItemContexts.map {
+            let interfaceStates = currentContexts.map {
                 ($0, $0.interfaceState)
             }
             guard !interfaceStates.contains(where: { $0.1 == .showing }) else {
-                for context in temporarilyShownItemContexts {
+                for context in currentContexts {
                     context.closedSince = nil
                 }
                 MenuBarItemManager.diagLog.debug("Menu bar item interface is shown, so waiting to rehide")
@@ -755,10 +700,10 @@ extension MenuBarItemManager {
             let delay = appState.settings.general.tempShowInterval
             if delay > 0 {
                 let now = Date()
-                for context in temporarilyShownItemContexts where context.closedSince == nil {
+                for context in currentContexts where context.closedSince == nil {
                     context.closedSince = now
                 }
-                let closedFor = temporarilyShownItemContexts
+                let closedFor = currentContexts
                     .compactMap { $0.closedSince.map { now.timeIntervalSince($0) } }
                     .min() ?? delay
                 if closedFor < delay {
@@ -768,42 +713,30 @@ extension MenuBarItemManager {
             }
         }
 
-        var currentContexts = temporarilyShownItemContexts
-        temporarilyShownItemContexts.removeAll()
-
-        let items = await MenuBarItem.getMenuBarItems(option: .activeSpace)
         var failedContexts = [TemporarilyShownItemContext]()
         // A context deferred for a hidden menu bar needs the timer even after
         // a forced rehide, whose callers don't always re-arm it.
         var deferredBehindHiddenMenuBar = false
 
-        appState.hidEventManager.stopAll()
-        defer {
-            appState.hidEventManager.startAll()
-        }
-
-        // Shorter from temporarilyShow, where the user is waiting; move()
-        // guards the race itself.
+        // The move transaction owns the cursor only while it actually posts a gesture.
         await eventSleep(for: isCalledFromTemporarilyShow ? .milliseconds(50) : .milliseconds(250))
 
-        MenuBarItemManager.diagLog.debug("Rehiding temporarily shown items")
-
-        // 30 s watchdog, or the 1 s default fires mid-rehide and flickers the
-        // cursor (#899).
-        MouseHelpers.hideCursor(watchdogTimeout: .seconds(30))
-        defer {
-            MouseHelpers.showCursor()
-        }
-
-        // The outer hide/show owns the cursor, or it flickers per item.
-        let wasBulkApplyInProgress = isBulkApplyInProgress
-        isBulkApplyInProgress = true
-        defer {
-            isBulkApplyInProgress = wasBulkApplyInProgress
-        }
-
-        while let context = currentContexts.popLast() {
-            guard let item = items.first(matchingTag: context.tag, pid: context.sourcePID) else {
+        for context in currentContexts.reversed() {
+            guard temporarilyShownItemContexts.contains(where: { $0 === context }) else { continue }
+            guard context.isOnActiveBar else {
+                failedContexts.append(context)
+                deferredBehindHiddenMenuBar = true
+                continue
+            }
+            let items: [MenuBarItem]
+            do {
+                items = try await rehideItems(on: context.displayID)
+            } catch {
+                failedContexts.append(context)
+                deferredBehindHiddenMenuBar = true
+                continue
+            }
+            guard let item = items.first(where: { $0.windowID == context.shownWindowID && $0.tag.matchesIgnoringWindowID(context.tag) && ($0.sourcePID ?? $0.ownerPID) == context.sourcePID }) else {
                 // The owning process is gone, so the item never comes back;
                 // drop it now instead of retrying for a dead icon. (#1149)
                 if context.sourcePID > 0, !Self.previousPIDIsLive(context.sourcePID) {
@@ -827,6 +760,7 @@ extension MenuBarItemManager {
                 // leave recovery to relocatePendingItems.
                 if context.notFoundAttempts < 10 {
                     failedContexts.append(context)
+                    deferredBehindHiddenMenuBar = true
                 } else {
                     MenuBarItemManager.diagLog.warning(
                         """
@@ -857,81 +791,38 @@ extension MenuBarItemManager {
                 continue
             }
 
-            guard let destination = resolveReturnDestination(for: context, in: items) else {
-                MenuBarItemManager.diagLog.error(
-                    """
-                    Could not resolve return destination for \(item.logString); \
-                    item will remain in visible section until next cache cycle handles pendingRelocations
-                    """
-                )
-                // Don't remove pendingRelocations; let relocatePendingItems handle it.
-                continue
-            }
-
             do {
-                // Rehiding completes the user's reveal, so it is theirs too.
-                try await move(
-                    item: item,
-                    to: destination,
-                    on: context.displayID,
-                    skipInputPause: true,
-                    options: .init(isUserInitiated: true)
-                )
-                let tagIdentifier = context.tag.tagIdentifier
-                pendingRelocations.removeValue(forKey: tagIdentifier)
-                pendingReturnDestinations.removeValue(forKey: tagIdentifier)
-            } catch {
-                context.rehideAttempts += 1
-                MenuBarItemManager.diagLog.warning(
-                    """
-                    Attempt \(context.rehideAttempts) to rehide \
-                    \(item.logString) failed with error: \
-                    \(error)
-                    """
-                )
-                // 3 per call x 3 timer rounds. Beyond this, retrying only
-                // saturates the event semaphore.
-                let maxTotalRehideAttempts = 9
-                if context.rehideAttempts < 3 {
-                    currentContexts.append(context)
-                } else if context.rehideAttempts < maxTotalRehideAttempts {
+                switch try await returnShownItem(item, context: context) {
+                case .returned:
+                    guard temporarilyShownItemContexts.contains(where: { $0 === context }) else { continue }
+                    let key = context.tag.tagIdentifier
+                    pendingRelocations.removeValue(forKey: key)
+                    pendingReturnDestinations.removeValue(forKey: key)
+                case .userBusy:
                     failedContexts.append(context)
-                } else {
-                    // Give up this session. The waitForRelaunch sentinel holds
-                    // the windowID, so a relaunch clears it.
-                    let tagIdentifier = context.tag.tagIdentifier
-                    pendingRelocations[tagIdentifier] = waitForRelaunchValue(
-                        windowID: item.windowID,
-                        section: context.originalSection
-                    )
-                    persistPendingRelocations()
-                    MenuBarItemManager.diagLog.error(
-                        """
-                        Giving up rehide for \(item.logString) after \
-                        \(context.rehideAttempts) total attempts; \
-                        marked waitForRelaunch; relocatePendingItems will \
-                        retry only after app relaunch (new windowID)
-                        """
-                    )
+                    deferredBehindHiddenMenuBar = true
+                case .pending:
+                    break
                 }
+            } catch {
+                if !context.isOnActiveBar || error is SimpleSemaphore.TimeoutError || (error is TaskTimeoutError && !context.didRevealForRehide) {
+                    failedContexts.append(context)
+                    deferredBehindHiddenMenuBar = true
+                    continue
+                }
+                MenuBarItemManager.diagLog.warning("Rehide could not confirm the return of \(item.logString); retaining its saved destination: \(error)")
             }
         }
 
+        temporarilyShownItemContexts.removeAll { entry in
+            currentContexts.contains { $0 === entry } && !failedContexts.contains { $0 === entry }
+        }
         persistPendingRelocations()
 
-        if failedContexts.isEmpty {
-            MenuBarItemManager.diagLog.debug("All items were successfully rehidden")
-        } else {
-            MenuBarItemManager.diagLog.error(
-                """
-                Some items failed to rehide; keeping in context for retry: \
-                \(failedContexts.map(\.tag))
-                """
-            )
-            temporarilyShownItemContexts.append(contentsOf: failedContexts.reversed())
-            if Self.rearmsRehideTimer(force: force, deferredBehindHiddenMenuBar: deferredBehindHiddenMenuBar) {
-                runRehideTimer(for: 3)
-            }
+        if temporarilyShownItemContexts.contains(where: { !$0.isOnActiveBar }) {
+            runRehideTimer(for: 3)
+        } else if !failedContexts.isEmpty, Self.rearmsRehideTimer(force: force, deferredBehindHiddenMenuBar: deferredBehindHiddenMenuBar) {
+            runRehideTimer(for: 3)
         }
     }
 
@@ -963,10 +854,7 @@ extension MenuBarItemManager {
         displayBounds: [CGRect]
     ) -> Bool {
         guard
-            !itemIsOnScreen,
-            !itemBounds.isEmpty,
-            let hiddenDividerMaxX,
-            itemBounds.minX >= hiddenDividerMaxX
+            !itemIsOnScreen, !itemBounds.isEmpty, let hiddenDividerMaxX, itemBounds.minX >= hiddenDividerMaxX
         else {
             return false
         }

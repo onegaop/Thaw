@@ -126,7 +126,7 @@ extension MenuBarItemManager {
         let completedCyclesAtGateEntry = completedCacheCycles
         let moveTimestampAtGateEntry = lastMoveOperationTimestamp
         func snapshotIsCurrent(_ stage: String) -> Bool {
-            guard lastMoveOperationTimestamp == moveTimestampAtGateEntry else {
+            guard !isRevealingForRehide, lastMoveOperationTimestamp == moveTimestampAtGateEntry else {
                 MenuBarItemManager.diagLog.debug(
                     "cacheItemsRegardless: discarding stale snapshot at \(stage) because an item moved during this pass"
                 )
@@ -151,6 +151,7 @@ extension MenuBarItemManager {
             }
         }
 
+        guard !isRevealingForRehide else { return }
         let previousWindowIDs = cacheActor.cachedItemWindowIDs
         let previousCCGenericWindowIDs = cacheActor.cachedControlCenterGenericWindowIDs
         let displayID = Bridging.getActiveMenuBarDisplayID()
@@ -631,6 +632,7 @@ extension MenuBarItemManager {
         if !suppressAutomaticMoves {
             let pendingRelocationOutcome = await relocatePendingItems(
                 items,
+                on: displayID,
                 controlItems: controlItems,
                 shouldBeginMove: {
                     snapshotIsCurrent("pending-item relocation move preflight")

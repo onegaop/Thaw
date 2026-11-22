@@ -30,6 +30,9 @@ the items under New and Fixed.
 
 ### Fixed
 
+- Temporarily shown menu bar items check for a reachable return slot on their original display and keep their saved return position until they land in the correct section.
+- Quit from the menu bar can finish even when menu tracking delays cleanup.
+
 - Opening the Thaw Bar with missing captures now shows its loading message until the menu bar glyphs are ready or the first capture finishes. A warm row still opens immediately.
 - Turning off Automatically rehide now prevents pending timed, focus-change and outside-click hides from closing items. Pending hides also stop when you change the rehide strategy.
 - **A Thaw Bar with its own tint no longer hides its items.** The tint now colors the bar behind the items, so even a fully opaque one leaves them visible.
