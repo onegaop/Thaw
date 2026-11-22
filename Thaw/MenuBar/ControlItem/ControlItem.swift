@@ -1003,9 +1003,10 @@ final class ControlItem {
 
         let quitItem = NSMenuItem(
             title: String(localized: "Quit \(Constants.displayName)"),
-            action: #selector(NSApp.terminate),
+            action: #selector(quitFromMenu),
             keyEquivalent: "q"
         )
+        quitItem.target = self
         quitItem.keyEquivalentModifierMask = .command
         quitItem.image = NSImage(systemSymbolName: "power", accessibilityDescription: "Quit")
         menu.addItem(quitItem)
@@ -1022,6 +1023,10 @@ final class ControlItem {
         menu.addItem(restartItem)
 
         return menu
+    }
+
+    @objc private func quitFromMenu() {
+        ApplicationTermination.request()
     }
 
     @objc private func restartFromMenu() {

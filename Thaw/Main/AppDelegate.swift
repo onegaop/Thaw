@@ -13,10 +13,7 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let appState = AppState()
     private var isBlockedByOriginalThaw = false
-    private var isPreparingForTermination = false
-    private var hasRepliedToTerminationRequest = false
-    private var terminationAttemptID = UUID()
-    private var terminationTimeoutTask: Task<Void, Never>?
+    private let termination = ApplicationTermination.Preparation()
 
     #if DEBUG
         /// Whether the app is running as an Xcode preview/playground.
@@ -144,39 +141,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard !isPreparingForTermination else {
-            return .terminateLater
-        }
-
-        let attemptID = UUID()
-        terminationAttemptID = attemptID
-        terminationTimeoutTask?.cancel()
-        isPreparingForTermination = true
-        hasRepliedToTerminationRequest = false
-        appState.diagLog.info("Application asked to terminate - restoring blocked items asynchronously")
-
-        Task { @MainActor in
-            _ = await appState.itemManager.restoreBlockedItemsToVisible()
-            guard terminationAttemptID == attemptID else {
-                return
+        termination.begin(
+            restore: { [appState] in
+                appState.diagLog.info("Application asked to terminate - restoring blocked items asynchronously")
+                _ = await appState.itemManager.restoreBlockedItemsToVisible()
+            },
+            reply: { [appState] timedOut in
+                if timedOut {
+                    appState.diagLog.warning("Blocked item restore operation timed out during app termination")
+                } else {
+                    appState.diagLog.info("Blocked item restore operation completed during app termination")
+                }
+                sender.reply(toApplicationShouldTerminate: true)
             }
-            terminationTimeoutTask?.cancel()
-            replyToTerminationRequest(sender, timedOut: false)
-        }
-
-        terminationTimeoutTask = Task { @MainActor in
-            do {
-                try await Task.sleep(for: .seconds(2))
-            } catch {
-                return
-            }
-            guard terminationAttemptID == attemptID else {
-                return
-            }
-            replyToTerminationRequest(sender, timedOut: true)
-        }
-
-        return .terminateLater
+        )
     }
 
     func applicationWillTerminate(_: Notification) {
@@ -369,28 +347,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             senderIdentity: identity,
             senderName: sender?.displayName
         ) ? bundleId : nil
-    }
-
-    private func replyToTerminationRequest(
-        _ sender: NSApplication,
-        timedOut: Bool
-    ) {
-        guard !hasRepliedToTerminationRequest else {
-            return
-        }
-
-        hasRepliedToTerminationRequest = true
-        isPreparingForTermination = false
-        terminationTimeoutTask?.cancel()
-        terminationTimeoutTask = nil
-
-        if timedOut {
-            appState.diagLog.warning("Blocked item restore operation timed out during app termination")
-        } else {
-            appState.diagLog.info("Blocked item restore operation completed during app termination")
-        }
-
-        sender.reply(toApplicationShouldTerminate: true)
     }
 
     /// Handles thaw://get?key=X&callback=Y.

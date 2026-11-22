@@ -942,13 +942,7 @@ final class MenuBarManager {
     }
 
     @objc private func quitFromSecondaryContextMenu() {
-        // Terminate only in .default mode, after popUp's tracking loop and its
-        // Task unwind, so applicationShouldTerminate's Tasks can drain.
-        RunLoop.main.perform(inModes: [.default]) {
-            MainActor.assumeIsolated {
-                NSApp.terminate(nil)
-            }
-        }
+        ApplicationTermination.request()
     }
 
     @objc private func restartFromSecondaryContextMenu() {
