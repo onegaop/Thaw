@@ -35,6 +35,7 @@ final class IceBarPanel: NSPanel {
 
     /// Background cache task started when the panel is shown.
     private var cacheTask: Task<Void, Never>?
+    private var opening: ThawBarOpeningCapture?
 
     init() {
         super.init(
@@ -201,6 +202,7 @@ final class IceBarPanel: NSPanel {
             return
         }
 
+        let started = ContinuousClock.now
         let menuBarHeight = screen.getMenuBarHeightEstimate()
         diagLog.notice("""
         show: screen=\(screen.displayID) \
@@ -218,25 +220,25 @@ final class IceBarPanel: NSPanel {
         currentSection = section
         lastShowTimestamp = Date()
 
-        // Light/dark tint is baked into captures. Restore this display's
-        // snapshot, or clear the other display's icons and recapture in the
-        // background.
-        let switchedDisplay = lastShownDisplayID.map { $0 != screen.displayID } ?? false
-        let needsBackgroundRecapture = appState.imageCache.prepareImagesForThawBar(
-            displayID: screen.displayID,
-            section: section
-        )
+        cacheTask?.cancel()
+        opening?.cancel()
+        let displayID = screen.displayID
+        let switchedDisplay = lastShownDisplayID.map { $0 != displayID } ?? false
+        let manager = appState.itemManager
+        let layoutNeedsSettle = switchedDisplay || manager.itemCache.displayID != displayID
+        let images = appState.imageCache
+        let session = images.beginThawBarCapture(displayID: displayID, section: section)
         if switchedDisplay {
             colorManager.invalidateColorInfo()
-            diagLog.notice(
-                "show: display \(self.lastShownDisplayID.map(String.init) ?? "nil") → \(screen.displayID); warmCache=\(!needsBackgroundRecapture)"
-            )
         }
-        lastShownDisplayID = screen.displayID
+        lastShownDisplayID = displayID
 
-        // Never defer orderFront: currentSection without a visible panel
-        // makes a second click call hide() instead of show().
-        let openingCapture = ThawBarOpeningCapture()
+        let openingCapture = ThawBarOpeningCapture { [weak self] source in
+            guard let self else { return }
+            let elapsed = Int(started.duration(to: .now).milliseconds)
+            self.diagLog.notice("Thaw Bar first icon view appeared: session=\(session.id) display=\(displayID) source=\(source.rawValue) panelVisible=\(self.isVisible) elapsedMs=\(elapsed)")
+        }
+        opening = openingCapture
         contentView = IceBarHostingView(
             openingCapture: openingCapture,
             appState: appState,
@@ -247,33 +249,37 @@ final class IceBarPanel: NSPanel {
 
         updateOrigin(for: screen)
 
-        // After updating the origin, before showing.
-        colorManager.updateAllProperties(with: frame, screen: screen)
-
         orderFrontRegardless()
-
-        let panelFrame = frame
-        let targetDisplayID = screen.displayID
-        cacheTask?.cancel()
-        cacheTask = Task { [weak appState, weak colorManager] in
-            defer { openingCapture.isPending = false }
-            guard let appState else { return }
-
-            await colorManager?.refresh(with: panelFrame, screen: screen)
-
-            await appState.itemManager.rehideTemporarilyShownItems(force: true)
-            guard !Task.isCancelled else { return }
-
-            // On a newly active screen the control items are still moving.
-            // Caching now reads stale bounds, classifies everything as
-            // visible, and leaves the hidden section empty.
-            try? await Task.sleep(for: .milliseconds(500))
-            guard !Task.isCancelled else { return }
-            await appState.itemManager.cacheItemsIfNeeded()
-            guard !Task.isCancelled else { return }
-            await appState.imageCache.recaptureSection(
-                section,
-                preferredDisplayID: targetDisplayID
+        // The color manager observes panel visibility, screen and frame independently.
+        let elapsed = Int(started.duration(to: .now).milliseconds)
+        diagLog.notice("Thaw Bar ordered front: session=\(session.id) display=\(displayID) elapsedMs=\(elapsed)")
+        cacheTask = Task { [weak self] in
+            await ThawBarOpeningWork.run(
+                needsLayoutSettle: layoutNeedsSettle,
+                isCurrent: { self?.opening === openingCapture },
+                rehide: {
+                    guard !Task.isCancelled, self?.opening === openingCapture, !manager.temporarilyShownItemContexts.isEmpty else { return false }
+                    await manager.rehideTemporarilyShownItems(force: true)
+                    return true
+                },
+                settle: { try? await Task.sleep(for: .milliseconds(500)) },
+                refreshLayout: {
+                    guard Bridging.getActiveMenuBarDisplayID() == displayID else { return }
+                    if manager.itemCache.displayID == displayID {
+                        await manager.cacheItemsIfNeeded()
+                    } else {
+                        await manager.cacheItemsRegardless(options: .init(
+                            skipSavedLayoutApply: true,
+                            suppressAutomaticMoves: true,
+                            suppressSavedOrderPersistence: true
+                        ))
+                    }
+                },
+                capture: { await images.captureMissingImages(for: session) },
+                finishOpening: {
+                    openingCapture.isPending = false
+                    images.finishThawBarCapture(for: session)
+                }
             )
         }
     }
@@ -292,6 +298,9 @@ final class IceBarPanel: NSPanel {
         CustomTooltipPanel.shared.dismiss()
         cacheTask?.cancel()
         cacheTask = nil
+        opening?.cancel()
+        opening = nil
+        appState?.imageCache.endThawBarCapture()
         contentView = nil
         orderOut(nil)
         super.close()
@@ -383,7 +392,8 @@ private struct IceBarContentView: View {
     let section: MenuBarSection.Name
 
     private var items: [MenuBarItem] {
-        itemManager.itemCache.managedItems(for: section)
+        guard itemManager.itemCache.displayID == screen.displayID else { return [] }
+        return itemManager.itemCache.managedItems(for: section)
     }
 
     /// The menu bar's appearance unless the Thaw Bar has its own.
@@ -458,30 +468,33 @@ private struct IceBarContentView: View {
     }
 
     /// Per-column maximum widths for the grid layout.
-    private var columnWidths: [CGFloat] {
+    private func gridColumnWidths(for rows: [[MenuBarItem]], canCapture: Bool) -> [CGFloat] {
         // Not []: the grid subscripts columnWidths whenever rows.count > 1.
         guard let maxHeight = itemMaxHeight, maxHeight > 0 else {
             return Array(repeating: 0, count: gridColumns)
         }
-        let allItems = items
-        let rows = allItems.chunks(ofCount: gridColumns).map(Array.init)
         return (0 ..< gridColumns).map { col in
             rows.compactMap { row in
                 guard col < row.count else { return nil }
                 let item = row[col]
-                let cachedImage = imageCache.image(for: item.tag)
-                guard !MenuBarItemIconFallback.shouldUseAppIcon(
+                let cachedImage = imageCache.imageForThawBar(for: item.tag, on: screen.displayID)
+                let source = openingCapture.source(
                     for: item,
                     hasCapture: cachedImage != nil,
-                    prefersAppIcon: prefersAppIcon
-                ), let cachedImage else {
+                    prefersAppIcons: prefersAppIcon,
+                    canCapture: canCapture,
+                    refreshPending: imageCache.isThawBarCapturePending
+                )
+                guard let source else {
+                    return ThawBarOpeningCapture.placeholderSize(for: item.bounds, maxHeight: maxHeight).width
+                }
+                guard source == .capture, let cachedImage else {
                     // No capture: reserve width for the square app icon.
                     return maxHeight * IceBarItemView.iconFallbackHeightRatio
                 }
-                let image = cachedImage.nsImage
-                guard image.size.height > 0 else { return image.size.width }
-                let scale = maxHeight / image.size.height
-                return image.size.width * scale
+                let size = cachedImage.scaledSize
+                guard size.height > 0 else { return size.width }
+                return size.width * maxHeight / size.height
             }.max() ?? 0
         }
     }
@@ -581,19 +594,8 @@ private struct IceBarContentView: View {
         appState.openWindow(.settings)
     }
 
-    private var content: some View {
-        openingCapture.row(
-            for: items,
-            cache: imageCache,
-            prefersAppIcons: prefersAppIcon,
-            canCapture: appState.hasPermission(.screenRecording)
-        ) { itemContent }
-    }
-
     @ViewBuilder
-    private var itemContent: some View {
-        // No Screen Recording check on purpose: uncaptured items fall back to
-        // app icons, and notch overflow can force this bar on.
+    private var content: some View {
         if section == .alwaysHidden || section == .hidden, items.isEmpty {
             HStack {
                 if cacheGracePeriodActive {
@@ -638,12 +640,15 @@ private struct IceBarContentView: View {
             }
         } else {
             let isLightBackground = backgroundColorInfo?.isBright(for: screen) == true
+            let canCapture = appState.hasPermission(.screenRecording)
             switch layout {
             case .horizontal:
                 ScrollView(.horizontal) {
                     HStack(spacing: itemSpacing) {
                         ForEach(items, id: \.windowID) { item in
                             IceBarItemView(
+                                openingCapture: openingCapture,
+                                canCapture: canCapture,
                                 imageCache: imageCache,
                                 itemManager: itemManager,
                                 menuBarManager: menuBarManager,
@@ -672,6 +677,8 @@ private struct IceBarContentView: View {
                     VStack(spacing: itemSpacing) {
                         ForEach(items, id: \.windowID) { item in
                             IceBarItemView(
+                                openingCapture: openingCapture,
+                                canCapture: canCapture,
                                 imageCache: imageCache,
                                 itemManager: itemManager,
                                 menuBarManager: menuBarManager,
@@ -696,10 +703,13 @@ private struct IceBarContentView: View {
                 ScrollView(.vertical) {
                     VStack(spacing: 0) {
                         let rows = items.chunks(ofCount: gridColumns).map(Array.init)
+                        let columnWidths = rows.count > 1 ? gridColumnWidths(for: rows, canCapture: canCapture) : []
                         ForEach(Array(rows.enumerated()), id: \.offset) { rowIndex, rowItems in
                             HStack(spacing: itemSpacing) {
                                 ForEach(Array(rowItems.enumerated()), id: \.element.windowID) { colIndex, item in
                                     let itemView = IceBarItemView(
+                                        openingCapture: openingCapture,
+                                        canCapture: canCapture,
                                         imageCache: imageCache,
                                         itemManager: itemManager,
                                         menuBarManager: menuBarManager,
@@ -746,6 +756,8 @@ private struct IceBarContentView: View {
 private struct IceBarItemView: View {
     private static let diagLog = DiagLog(category: "IceBar.ItemView")
 
+    let openingCapture: ThawBarOpeningCapture
+    let canCapture: Bool
     let imageCache: MenuBarItemImageCache
     let itemManager: MenuBarItemManager
     let menuBarManager: MenuBarManager
@@ -858,44 +870,47 @@ private struct IceBarItemView: View {
     }
 
     var body: some View {
-        let capturedImage = imageCache.image(for: item.tag)
-        let usesAppIcon = MenuBarItemIconFallback.shouldUseAppIcon(
+        let capturedImage = imageCache.imageForThawBar(for: item.tag, on: displayID)
+        if let source = openingCapture.source(
             for: item,
             hasCapture: capturedImage != nil,
-            prefersAppIcon: prefersAppIcon
-        )
-        let image = usesAppIcon
-            ? MenuBarItemIconFallback.image(for: item)
-            : capturedImage?.nsImage
-        if let image {
-            let size = targetSize(for: image, usesAppIcon: usesAppIcon)
-            Image(nsImage: image)
-                .interpolation(.high)
-                .antialiased(true)
-                .resizable()
-                .frame(width: size.width, height: size.height)
-                .background {
-                    RoundedRectangle(cornerRadius: pillCornerRadius, style: hasRoundedShape ? .circular : .continuous)
-                        .fill((isLightBackground ? Color.black : Color.white).opacity(isHovered ? 0.15 : 0))
-                        .padding(.vertical, 3)
-                }
-                .contentShape(Rectangle())
-                .overlay {
-                    IceBarItemClickView(
-                        item: item,
-                        tooltipDelay: tooltipDelay,
-                        leftClickAction: leftClickAction,
-                        rightClickAction: rightClickAction,
-                        onHover: { hovering in
-                            isHovered = hovering
-                        }
-                    )
-                }
-                .animation(.easeInOut(duration: 0.15), value: isHovered)
-                .accessibilityLabel(item.displayName)
-                .accessibilityAction(named: "left click", leftClickAction)
-                .accessibilityAction(named: "right click", rightClickAction)
+            prefersAppIcons: prefersAppIcon,
+            canCapture: canCapture,
+            refreshPending: imageCache.isThawBarCapturePending
+        ) {
+            if let image = source == .fallback ? MenuBarItemIconFallback.image(for: item) : capturedImage?.nsImage {
+                icon(image, source: source)
+            }
+        } else {
+            openingCapture.placeholder(for: item.bounds, maxHeight: maxHeight)
         }
+    }
+
+    private func icon(_ image: NSImage, source: ThawBarOpeningCapture.IconSource) -> some View {
+        let size = targetSize(for: image, usesAppIcon: source == .fallback)
+        return openingCapture.image(Image(nsImage: image), source: source)
+            .frame(width: size.width, height: size.height)
+            .background {
+                RoundedRectangle(cornerRadius: pillCornerRadius, style: hasRoundedShape ? .circular : .continuous)
+                    .fill((isLightBackground ? Color.black : Color.white).opacity(isHovered ? 0.15 : 0))
+                    .padding(.vertical, 3)
+            }
+            .contentShape(Rectangle())
+            .overlay {
+                IceBarItemClickView(
+                    item: item,
+                    tooltipDelay: tooltipDelay,
+                    leftClickAction: leftClickAction,
+                    rightClickAction: rightClickAction,
+                    onHover: { hovering in
+                        isHovered = hovering
+                    }
+                )
+            }
+            .animation(.easeInOut(duration: 0.15), value: isHovered)
+            .accessibilityLabel(item.displayName)
+            .accessibilityAction(named: "left click", leftClickAction)
+            .accessibilityAction(named: "right click", rightClickAction)
     }
 }
 

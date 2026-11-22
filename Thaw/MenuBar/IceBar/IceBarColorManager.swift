@@ -30,6 +30,9 @@ final class IceBarColorManager {
     private var windowImageGeneration: Int = 0
 
     @ObservationIgnored
+    private var capturingDisplayID: CGDirectDisplayID?
+
+    @ObservationIgnored
     private var cancellables = Set<AnyCancellable>()
 
     /// Active only while the Thaw Bar is visible.
@@ -174,6 +177,7 @@ final class IceBarColorManager {
     /// Clears windowImage and invalidates any in-flight capture.
     private func clearWindowImage() {
         windowImageGeneration += 1
+        capturingDisplayID = nil
         windowImage = nil
     }
 
@@ -183,8 +187,9 @@ final class IceBarColorManager {
     /// Don't update colorInfo after false.
     @discardableResult
     private func updateWindowImage(for screen: NSScreen) async -> Bool {
-        let windows = WindowInfo.createWindows(option: .onScreen)
         let displayID = screen.displayID
+        guard capturingDisplayID != displayID else { return false }
+        let windows = WindowInfo.createWindows(option: .onScreen)
 
         guard
             let menuBarWindow = WindowInfo.menuBarWindow(from: windows, for: displayID),
@@ -201,6 +206,12 @@ final class IceBarColorManager {
         // Stamp before suspending; skip the write if it moved meanwhile.
         windowImageGeneration += 1
         let generation = windowImageGeneration
+        capturingDisplayID = displayID
+        defer {
+            if generation == windowImageGeneration {
+                capturingDisplayID = nil
+            }
+        }
 
         let image = await ScreenCapture.captureWindowsAsync(
             with: windowIDs,
@@ -253,14 +264,6 @@ final class IceBarColorManager {
         let next = MenuBarAverageColorInfo(color: averageColor, source: .menuBarWindow)
         guard colorInfo != next else { return }
         colorInfo = next
-    }
-
-    func updateAllProperties(with frame: CGRect, screen: NSScreen) {
-        // Synchronous so IceBar.show doesn't go async.
-        Task { [weak self] in
-            guard let self else { return }
-            await self.refresh(with: frame, screen: screen)
-        }
     }
 
     /// So a cross-display open can't reuse the previous screen's brightness.

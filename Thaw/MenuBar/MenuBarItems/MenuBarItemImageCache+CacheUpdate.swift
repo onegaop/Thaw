@@ -96,6 +96,8 @@ extension MenuBarItemImageCache {
             return
         }
 
+        guard let context = captureContext(for: screen), !isThawBarCapturePending else { return }
+        let itemCache = appState.itemManager.itemCache
         let scale = screen.backingScaleFactor
         MenuBarItemImageCache.diagLog.notice("updateCacheWithoutChecks: displayID=\(screen.displayID) backingScaleFactor=\(Double(scale)) hasNotch=\(screen.hasNotch) menuBarHeight=\(Double(screen.getMenuBarHeightEstimate())) sections=\(sections.map(\.logString))")
         var newImages = [MenuBarItemTag: CapturedImage]()
@@ -135,9 +137,8 @@ extension MenuBarItemImageCache {
         let allValidTags = Set(
             appState.itemManager.itemCache.managedItems.map(\.tag)
         )
-        let displayID = screen.displayID
-
-        await MainActor.run { [newImages, allValidTags, displayID] in
+        await MainActor.run { [newImages, allValidTags] in
+            guard self.acceptsCapture(context), appState.itemManager.itemCache == itemCache else { return }
             let beforeCount = images.count
 
             // Keep images of recently failed tags; their window may have briefly
@@ -214,7 +215,7 @@ extension MenuBarItemImageCache {
             }
 
             if !newImages.isEmpty {
-                storeImages(for: displayID, capturedTags: newImages.keys)
+                storeImages(newImages, context: context)
             }
         }
     }

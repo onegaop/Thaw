@@ -358,10 +358,12 @@ extension MenuBarItemImageCache {
     nonisolated func refreshImages(
         of items: [MenuBarItem],
         scale: CGFloat,
+        context: CaptureContext,
+        opening: ThawBarCaptureSession? = nil,
         viaSCK: Bool = false
     ) async {
         if !viaSCK {
-            await refreshImagesFromCaptureService(items: items, scale: scale)
+            await refreshImagesFromCaptureService(items: items, scale: scale, context: context, opening: opening)
             return
         }
 
@@ -391,6 +393,8 @@ extension MenuBarItemImageCache {
             return
         }
 
+        guard await acceptsCapture(context) else { return }
+        opening?.logCaptureRequest(count: windowIDs.count)
         // SCK is leak-free but display-bounded, so only for on-screen items.
         let compositeImage = await ScreenCapture.captureWindowsAsync(
             with: windowIDs,
@@ -440,14 +444,16 @@ extension MenuBarItemImageCache {
         }
 
         guard !newImages.isEmpty, !Task.isCancelled else { return }
-        await applyRefreshedImages(newImages)
+        await applyRefreshedImages(newImages, from: items, context: context)
     }
 
     /// Offscreen items go through the recyclable SkyLight helper so the
     /// per-call dictionary leak stays out of the UI process.
     private nonisolated func refreshImagesFromCaptureService(
         items: [MenuBarItem],
-        scale: CGFloat
+        scale: CGFloat,
+        context: CaptureContext,
+        opening: ThawBarCaptureSession?
     ) async {
         let windowIDs = items.map(\.windowID)
         guard !windowIDs.isEmpty else { return }
@@ -455,6 +461,8 @@ extension MenuBarItemImageCache {
         for item in items {
             storage[item.windowID] = item
         }
+        guard await acceptsCapture(context) else { return }
+        opening?.logCaptureRequest(count: windowIDs.count)
         let frames = await MenuBarCaptureService.Connection.shared.capture(
             windowIDs: windowIDs,
             scale: scale,
@@ -470,7 +478,7 @@ extension MenuBarItemImageCache {
             newImages[item.tag] = CapturedImage(cgImage: image, scale: CGFloat(frame.scale))
         }
         guard !newImages.isEmpty, !Task.isCancelled else { return }
-        await applyRefreshedImages(newImages)
+        await applyRefreshedImages(newImages, from: items, context: context)
     }
 
     /// Captures a fresh batch for image-comparison triggers via the helper process.
@@ -532,13 +540,28 @@ extension MenuBarItemImageCache {
         return images
     }
 
-    private func applyRefreshedImages(_ newImages: [MenuBarItemTag: CapturedImage]) {
+    private func applyRefreshedImages(
+        _ captured: [MenuBarItemTag: CapturedImage],
+        from items: [MenuBarItem],
+        context: CaptureContext
+    ) {
+        guard acceptsCapture(context), let cache = appState?.itemManager.itemCache else { return }
+        let liveByID = Dictionary(cache.managedItems.map { ($0.windowID, $0.tag) }, uniquingKeysWith: { first, _ in first })
+        let liveTags = Set(items.filter { liveByID[$0.windowID] == $0.tag }.map(\.tag))
+        var newImages = [MenuBarItemTag: CapturedImage]()
         var updatedCount = 0
-        for (tag, newImage) in newImages where !CapturedImage.isVisuallyEqual(images[tag], newImage) {
-            images[tag] = newImage
-            updateAccessOrder(for: tag)
-            updatedCount += 1
+        for (tag, newImage) in captured where liveTags.contains(tag) {
+            if let previous = images[tag], CapturedImage.isVisuallyEqual(previous, newImage) {
+                // Keep the verified pixels' identity stable for both consumers and the snapshot.
+                newImages[tag] = previous
+            } else {
+                images[tag] = newImage
+                updateAccessOrder(for: tag)
+                updatedCount += 1
+                newImages[tag] = newImage
+            }
         }
+        storeImages(newImages, context: context)
         // Record unchanged captures too: steady samples are what age a blink out.
         recordForAttention(newImages)
         if updatedCount > 0 {

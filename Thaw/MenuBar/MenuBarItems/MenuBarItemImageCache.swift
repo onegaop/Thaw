@@ -68,11 +68,7 @@ final class MenuBarItemImageCache: @unchecked Sendable {
             availableDisplayIDs: screens.map(\.displayID),
             activeMenuBarDisplayID: Bridging.getActiveMenuBarDisplayID(),
             mainDisplayID: CGMainDisplayID()
-        ) else {
-            return nil
-        }
-
-        guard let screen = screens.first(where: { $0.displayID == resolution.displayID }) else {
+        ), let screen = screens.first(where: { $0.displayID == resolution.displayID }) else {
             return nil
         }
 
@@ -121,14 +117,7 @@ final class MenuBarItemImageCache: @unchecked Sendable {
             if old.cgImage === new.cgImage {
                 return old.scale == new.scale
             }
-            guard old.scale == new.scale,
-                  old.cgImage.width == new.cgImage.width,
-                  old.cgImage.height == new.cgImage.height
-            else {
-                return false
-            }
-            guard let oldData = old.cgImage.dataProvider?.data,
-                  let newData = new.cgImage.dataProvider?.data
+            guard old.scale == new.scale, old.cgImage.width == new.cgImage.width, old.cgImage.height == new.cgImage.height, let oldData = old.cgImage.dataProvider?.data, let newData = new.cgImage.dataProvider?.data
             else {
                 return false
             }
@@ -145,8 +134,17 @@ final class MenuBarItemImageCache: @unchecked Sendable {
 
     /// Per-display icon snapshots so switching screens can restore the correct
     /// light/dark tint immediately instead of flashing the previous screen.
-    @ObservationIgnored
     var imagesByDisplay = [CGDirectDisplayID: [MenuBarItemTag: CapturedImage]]()
+
+    @ObservationIgnored var snapshotAppearances = [CGDirectDisplayID: CaptureAppearance]()
+    @ObservationIgnored var capturedAtByDisplay = [CGDirectDisplayID: [MenuBarItemTag: ContinuousClock.Instant]]()
+    @ObservationIgnored var warmRefreshTask: Task<Void, Never>?
+    var thawBarSession: ThawBarCaptureSession?
+    var isThawBarCapturePending = false
+    @ObservationIgnored var captureGeneration = UUID()
+    @ObservationIgnored var openingCaptureInFlight = false
+    @ObservationIgnored var openingAttempts = Set<CGWindowID>()
+    @ObservationIgnored var appearanceCaptureTask: Task<Void, Never>?
 
     /// Tracks which items are blinking for attention.
     ///
@@ -286,6 +284,8 @@ final class MenuBarItemImageCache: @unchecked Sendable {
 
     @MainActor
     deinit {
+        warmRefreshTask?.cancel()
+        appearanceCaptureTask?.cancel()
         memoryPressureSource?.cancel()
         currentUpdateTask?.cancel()
         liveRefreshTask?.cancel()
@@ -358,16 +358,30 @@ final class MenuBarItemImageCache: @unchecked Sendable {
             .map { _ in () }
             .eraseToAnyPublisher()
 
+            screenChangePublisher
+                .sink { [weak self] _ in
+                    self?.pruneDisconnectedSnapshots(connected: Set(NSScreen.screens.map(\.displayID)))
+                    self?.refreshOpeningAppearanceIfNeeded()
+                }
+                .store(in: &c)
+
             // Fed by averageColorInfoObservationTask, below.
             let colorChangePublisher: AnyPublisher<Void, Never> = colorChangeSubject
                 .eraseToAnyPublisher()
 
+            NSApp.publisher(for: \.effectiveAppearance)
+                .sink { [weak self] _ in self?.refreshOpeningAppearanceIfNeeded() }
+                .store(in: &c)
+
             averageColorInfoObservationTask?.cancel()
             averageColorInfoObservationTask = Task { [weak self, weak appState] in
                 var previous: MenuBarAverageColorInfo?
-                let changes = observedValues { appState?.menuBarManager.averageColorInfo }
-                for await info in changes {
+                let changes = observedValues {
+                    (appState?.menuBarManager.averageColorInfo, appState?.menuBarManager.averageColors)
+                }
+                for await (info, _) in changes {
                     guard let self else { return }
+                    self.refreshOpeningAppearanceIfNeeded()
                     guard info != previous else { continue }
                     previous = info
                     self.colorChangeSubject.send(())

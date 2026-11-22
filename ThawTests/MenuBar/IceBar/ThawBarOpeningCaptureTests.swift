@@ -12,77 +12,154 @@ import Testing
 @MainActor
 @Suite("Thaw Bar first icon row")
 struct ThawBarOpeningCaptureTests {
+    typealias Source = ThawBarOpeningCapture.IconSource
+
     private func item(_ id: CGWindowID) -> MenuBarItem {
         let name = String(id)
         return MenuBarItem(
             tag: MenuBarItemTag(namespace: .string("test.app"), title: name, windowID: id),
             windowID: id, ownerPID: 1, sourcePID: nil,
-            bounds: .zero, title: name, isOnScreen: false
+            bounds: CGRect(x: 0, y: 0, width: id == 1 ? 16 : 32, height: 22), title: name, isOnScreen: false
         )
     }
 
-    /// Red stands in for the full-color app icon. Captures use their original pixels.
-    private func pixels(
-        _ opening: ThawBarOpeningCapture, cache: MenuBarItemImageCache, dark: Bool,
-        prefersAppIcons: Bool = false, canCapture: Bool = true
-    ) throws -> Data {
-        let items = [item(1), item(2)]
-        let view = opening.row(for: items, cache: cache, prefersAppIcons: prefersAppIcons, canCapture: canCapture) {
-            HStack {
-                ForEach(items, id: \.windowID) { item in
-                    let capture = cache.image(for: item.tag)
-                    if MenuBarItemIconFallback.shouldUseAppIcon(
-                        for: item,
-                        hasCapture: capture != nil,
-                        prefersAppIcon: prefersAppIcons
-                    ) {
-                        Color.red.frame(width: 8, height: 8)
-                    } else if let capture {
-                        Image(decorative: capture.cgImage, scale: 1)
+    private func glyph(_ color: Color, bounds: CGRect) throws -> CGImage {
+        try #require(ImageRenderer(content: color.frame(width: bounds.width, height: bounds.height)).cgImage)
+    }
+
+    /// Renders the production image/placeholder views. Red marks a fallback in the pixel checks.
+    private func row(
+        _ opening: ThawBarOpeningCapture, captures: [CGWindowID: CGImage], dark: Bool,
+        prefersAppIcons: Bool = false, canCapture: Bool = true, refreshPending: Bool = false
+    ) throws -> CGImage {
+        let fallback = try glyph(.red, bounds: item(1).bounds)
+        let view = HStack(spacing: 0) {
+            ForEach([item(1), item(2)], id: \.windowID) { item in
+                let capture = captures[item.windowID]
+                if let source = opening.source(
+                    for: item, hasCapture: capture != nil, prefersAppIcons: prefersAppIcons,
+                    canCapture: canCapture, refreshPending: refreshPending
+                ) {
+                    let image = source == .capture ? capture : fallback
+                    if let image {
+                        opening.image(Image(decorative: image, scale: 1), source: source)
+                            .frame(width: item.bounds.width, height: item.bounds.height)
                     }
+                } else {
+                    opening.placeholder(for: item.bounds, maxHeight: item.bounds.height)
                 }
             }
         }
-        .frame(width: 200, height: 32)
-        .background(dark ? Color.black : Color.white)
+        .background(dark ? Color.black : .white)
         .environment(\.colorScheme, dark ? .dark : .light)
-        let image = try #require(ImageRenderer(content: view).cgImage)
-        return try #require(image.dataProvider?.data) as Data
+        return try #require(ImageRenderer(content: view).cgImage)
     }
 
-    @Test("Cold and partial openings reach the same glyph pixels as warm and repeated openings", arguments: [false, true])
-    func firstRow(dark: Bool) throws {
-        let cache = MenuBarItemImageCache()
-        let opening = ThawBarOpeningCapture()
-        let fallback = try pixels(opening, cache: cache, dark: dark, canCapture: false)
-        let loading = try pixels(opening, cache: cache, dark: dark)
-        #expect(loading != fallback)
-        let glyph = try #require(ImageRenderer(content: (dark ? Color.white : .black).frame(width: 8, height: 8)).cgImage)
-        let capture = MenuBarItemImageCache.CapturedImage(cgImage: glyph, scale: 1)
-        cache.images[item(1).tag] = capture
-        #expect(try pixels(opening, cache: cache, dark: dark) == loading)
-        cache.images[item(2).tag] = capture
-        let firstGlyphs = try pixels(opening, cache: cache, dark: dark)
-        #expect(firstGlyphs != loading)
-        #expect(firstGlyphs != fallback)
+    /// Compare actual RGBA bytes of a cell, excluding neighboring cells and scanline padding.
+    private func pixels(_ image: CGImage, x: Int, width: Int) throws -> Data {
+        let cropped = try #require(image.cropping(to: CGRect(x: x, y: 0, width: width, height: image.height)))
+        var result = Data(count: width * image.height * 4)
+        try result.withUnsafeMutableBytes { bytes in
+            let context = try #require(CGContext(
+                data: bytes.baseAddress, width: width, height: image.height, bitsPerComponent: 8,
+                bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ))
+            context.draw(cropped, in: CGRect(x: 0, y: 0, width: width, height: image.height))
+        }
+        return result
+    }
+
+    @Test("Partial cache draws each available glyph immediately at the same position as a warm opening", arguments: [false, true])
+    func partialRow(dark: Bool) throws {
+        var reports = [Source]()
+        let opening = ThawBarOpeningCapture { reports.append($0) }
+        let first = try glyph(dark ? .white : .black, bounds: item(1).bounds)
+        let second = try glyph(.gray, bounds: item(2).bounds)
+        let cold = try row(opening, captures: [:], dark: dark)
+        #expect(reports.isEmpty)
+        let partial = try row(opening, captures: [1: first], dark: dark)
+        #expect(reports == [.capture])
+        let full = try row(opening, captures: [1: first, 2: second], dark: dark)
         opening.isPending = false
-        #expect(try pixels(opening, cache: cache, dark: dark) == firstGlyphs)
-        #expect(try pixels(ThawBarOpeningCapture(), cache: cache, dark: dark) == firstGlyphs)
-        // An unavailable app icon leaves its capture in place even when app icons are preferred.
-        #expect(try pixels(opening, cache: cache, dark: dark, prefersAppIcons: true) == firstGlyphs)
+        let stable = try row(opening, captures: [1: first, 2: second], dark: dark)
+        let reopened = try row(ThawBarOpeningCapture(), captures: [1: first, 2: second], dark: dark)
+        #expect([cold, partial, full, stable, reopened].allSatisfy { $0.width == 48 && $0.height == 22 })
+        #expect(try pixels(partial, x: 0, width: 16) != pixels(cold, x: 0, width: 16))
+        #expect(try pixels(partial, x: 0, width: 16) == pixels(full, x: 0, width: 16))
+        #expect(try pixels(partial, x: 16, width: 32) == pixels(cold, x: 16, width: 32))
+        #expect(try pixels(partial, x: 16, width: 32) != pixels(full, x: 16, width: 32))
+        #expect(try pixels(full, x: 0, width: 48) == pixels(stable, x: 0, width: 48))
+        #expect(try pixels(full, x: 0, width: 48) == pixels(reopened, x: 0, width: 48))
+        #expect(reports == [.capture])
     }
 
-    @Test("Capture failure releases fallback only for its own presentation")
-    func fallbackAfterAttempt() throws {
-        let cache = MenuBarItemImageCache()
-        let old = ThawBarOpeningCapture()
-        let next = ThawBarOpeningCapture()
-        let pending = try pixels(next, cache: cache, dark: false)
+    @Test("Denied permission, preference and failed capture release fallback without masking later real icons")
+    func permittedFallback() throws {
+        var reports = [Source]()
+        let opening = ThawBarOpeningCapture { reports.append($0) }
+        let cold = try row(opening, captures: [:], dark: false)
+        let denied = try row(opening, captures: [:], dark: false, canCapture: false)
+        let preference = try row(opening, captures: [:], dark: false, prefersAppIcons: true)
+        opening.isPending = false
+        let failed = try row(opening, captures: [:], dark: false)
+        #expect(try pixels(cold, x: 0, width: 48) != pixels(failed, x: 0, width: 48))
+        #expect(try pixels(denied, x: 0, width: 48) == pixels(failed, x: 0, width: 48))
+        #expect(try pixels(preference, x: 0, width: 48) == pixels(failed, x: 0, width: 48))
+        #expect(reports == [.fallback])
+        let capture = try glyph(.gray, bounds: item(1).bounds)
+        // A quit app has no application icon. Its available capture still wins under the preference.
+        _ = try row(opening, captures: [1: capture], dark: false, prefersAppIcons: true)
+        #expect(reports == [.fallback, .capture])
+    }
+
+    @Test("Appearance refresh suppresses transient fallback and closing drops late appearances")
+    func appearanceRefreshAndReopen() throws {
+        var oldReports = [Source]()
+        let old = ThawBarOpeningCapture { oldReports.append($0) }
         old.isPending = false
-        let fallback = try pixels(old, cache: cache, dark: false)
-        #expect(fallback != pending)
-        #expect(try pixels(next, cache: cache, dark: false) == pending)
-        #expect(try pixels(next, cache: cache, dark: false, canCapture: false) == fallback)
-        #expect(try pixels(next, cache: cache, dark: false, prefersAppIcons: true) == fallback)
+        let refreshed = try row(old, captures: [:], dark: true, refreshPending: true)
+        #expect(oldReports.isEmpty)
+        old.cancel()
+        _ = try row(old, captures: [:], dark: true)
+        #expect(oldReports.isEmpty)
+        var newReports = [Source]()
+        let new = ThawBarOpeningCapture { newReports.append($0) }
+        let cold = try row(new, captures: [:], dark: true)
+        #expect(try pixels(refreshed, x: 0, width: 48) == pixels(cold, x: 0, width: 48))
+        #expect(newReports.isEmpty)
+        _ = try row(new, captures: [1: glyph(.white, bounds: item(1).bounds)], dark: true)
+        #expect(newReports == [.capture])
+    }
+
+    @Test("A mounted image changing from fallback to capture reports the first captured view once")
+    func firstCaptureInSameHost() throws {
+        var reports = [Source]()
+        let opening = ThawBarOpeningCapture { reports.append($0) }
+        let bitmap = try glyph(.gray, bounds: item(1).bounds)
+        @ViewBuilder func cell(_ source: Source?) -> some View {
+            if let source {
+                opening.image(Image(decorative: bitmap, scale: 1), source: source)
+                    .frame(width: 16, height: 22)
+            } else {
+                opening.placeholder(for: item(1).bounds, maxHeight: 22)
+            }
+        }
+        let host = NSHostingView(rootView: cell(nil))
+        host.frame = CGRect(x: 0, y: 0, width: 16, height: 22)
+        host.layoutSubtreeIfNeeded()
+        #expect(reports.isEmpty)
+        for source: Source in [.fallback, .capture, .capture, .fallback] {
+            host.rootView = cell(source)
+            host.layoutSubtreeIfNeeded()
+        }
+        #expect(reports == [.fallback, .capture])
+        #expect(host.window == nil)
+    }
+
+    @Test("Placeholder width follows native status item geometry across bar heights")
+    func placeholderWidth() {
+        #expect(ThawBarOpeningCapture.placeholderSize(for: item(2).bounds, maxHeight: 33) == CGSize(width: 48, height: 33))
+        #expect(ThawBarOpeningCapture.placeholderSize(for: .zero, maxHeight: 24) == CGSize(width: 24, height: 24))
     }
 }

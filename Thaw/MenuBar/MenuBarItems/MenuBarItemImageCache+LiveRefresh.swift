@@ -97,7 +97,9 @@ extension MenuBarItemImageCache {
             return
         }
 
-        if hasVisibleConsumer {
+        if nav.isIceBarPresented, !nav.isSettingsPresented, !nav.isSearchPresented, let session = thawBarSession {
+            await captureMissingImages(for: session)
+        } else if hasVisibleConsumer {
             await updateCache(nav: nav)
         } else {
             await updateCache(
@@ -172,9 +174,6 @@ extension MenuBarItemImageCache {
                 MenuBarItemImageCache.diagLog.debug(
                     "Starting live refresh (iceBar=\(nav.isIceBarPresented), search=\(nav.isSearchPresented), settings=\(nav.isSettingsPresented), attentionTriggers=\(self.attentionDetectionItemIdentifiers.count), globalAttention=\(globalAttentionDetection))"
                 )
-                lastSCKRefreshAt = nil
-                lastHiddenRefreshAt = nil
-                lastAlwaysHiddenRefreshAt = nil
                 self.liveRefreshTask = Task { [weak self] in
                     guard let self else { return }
                     await self.runLiveRefreshLoop()
@@ -264,13 +263,16 @@ extension MenuBarItemImageCache {
                 continue
             }
 
+            guard let context = captureContext(for: screen), !isThawBarCapturePending else {
+                try? await Task.sleep(for: .milliseconds(50))
+                continue
+            }
             let scale = screen.backingScaleFactor
             let now = ContinuousClock.now
             var nextWake = now + .seconds(max(interval, Self.minIconRefreshInterval))
 
             var hiddenItems = [MenuBarItem]()
             var alwaysHiddenItems = [MenuBarItem]()
-            var capturedTags = [MenuBarItemTag]()
 
             for section in sections {
                 let availableItems = appState.itemManager.itemCache.managedItems(for: section)
@@ -297,14 +299,15 @@ extension MenuBarItemImageCache {
                         now: now,
                         interval: duration
                     ) {
-                        lastSCKRefreshAt = now
                         MenuBarItemImageCache.diagLog.debug(
                             "liveRefresh (SCK): section=\(section.logString) items=\(items.count)"
                         )
                         await withCapturePermit {
-                            await refreshImages(of: items, scale: scale, viaSCK: true)
+                            guard acceptsCapture(context), !isThawBarCapturePending else { return }
+                            guard MenuBarLiveRefreshPolicy.isDue(lastCaptureAt: lastSCKRefreshAt, now: .now, interval: duration) else { return }
+                            lastSCKRefreshAt = .now
+                            await refreshImages(of: items, scale: scale, context: context, viaSCK: true)
                         }
-                        capturedTags.append(contentsOf: items.map(\.tag))
                     }
                     nextWake = min(
                         nextWake,
@@ -345,27 +348,25 @@ extension MenuBarItemImageCache {
                 alwaysHiddenDue: alwaysDue
             ) {
             case .hidden:
-                lastHiddenRefreshAt = now
                 MenuBarItemImageCache.diagLog.debug("liveRefresh (capture): hidden items=\(hiddenItems.count)")
                 await withCapturePermit {
-                    await refreshImages(of: hiddenItems, scale: scale)
+                    guard acceptsCapture(context), !isThawBarCapturePending else { return }
+                    guard MenuBarLiveRefreshPolicy.isDue(lastCaptureAt: lastHiddenRefreshAt, now: .now, interval: .seconds(hiddenInterval ?? interval)) else { return }
+                    lastHiddenRefreshAt = .now
+                    await refreshImages(of: hiddenItems, scale: scale, context: context)
                 }
-                capturedTags.append(contentsOf: hiddenItems.map(\.tag))
             case .alwaysHidden:
-                lastAlwaysHiddenRefreshAt = now
                 MenuBarItemImageCache.diagLog.debug(
                     "liveRefresh (capture): alwaysHidden items=\(alwaysHiddenItems.count)"
                 )
                 await withCapturePermit {
-                    await refreshImages(of: alwaysHiddenItems, scale: scale)
+                    guard acceptsCapture(context), !isThawBarCapturePending else { return }
+                    guard MenuBarLiveRefreshPolicy.isDue(lastCaptureAt: lastAlwaysHiddenRefreshAt, now: .now, interval: .seconds(alwaysInterval ?? 1)) else { return }
+                    lastAlwaysHiddenRefreshAt = .now
+                    await refreshImages(of: alwaysHiddenItems, scale: scale, context: context)
                 }
-                capturedTags.append(contentsOf: alwaysHiddenItems.map(\.tag))
             case .visible, nil:
                 break
-            }
-
-            await MainActor.run {
-                storeImages(for: screen.displayID, capturedTags: capturedTags)
             }
 
             if let hiddenInterval, !hiddenItems.isEmpty {

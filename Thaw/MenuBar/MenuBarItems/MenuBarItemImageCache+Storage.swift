@@ -178,6 +178,8 @@ extension MenuBarItemImageCache {
         images.removeAll()
         accessOrder.removeAll()
         imagesByDisplay.removeAll()
+        snapshotAppearances.removeAll()
+        capturedAtByDisplay.removeAll()
         lastCaptureDisplayID = nil
         failedCapturesLock.withLock { $0.removeAll() }
     }
@@ -204,6 +206,7 @@ extension MenuBarItemImageCache {
         let standing = lastCaptureDisplayID
         for displayID in imagesByDisplay.keys where displayID != standing {
             imagesByDisplay.removeValue(forKey: displayID)
+            capturedAtByDisplay.removeValue(forKey: displayID)
         }
         if let standing, var standingImages = imagesByDisplay[standing] {
             standingImages = standingImages.filter { images[$0.key] != nil }
@@ -214,6 +217,7 @@ extension MenuBarItemImageCache {
                     standingImages.removeValue(forKey: key)
                 }
             }
+            capturedAtByDisplay[standing] = capturedAtByDisplay[standing]?.filter { standingImages[$0.key] != nil }
             imagesByDisplay[standing] = standingImages
         }
     }
@@ -243,9 +247,7 @@ extension MenuBarItemImageCache {
     private static nonisolated let maxCacheAgeSeconds: TimeInterval = 30
 
     func saveToDisk() {
-        guard !images.isEmpty else { return }
-
-        guard let url = Self.cacheFileURL else { return }
+        guard !images.isEmpty, let url = Self.cacheFileURL else { return }
 
         let snapshot = images
 
@@ -309,12 +311,7 @@ extension MenuBarItemImageCache {
                 var loadedImages = [MenuBarItemTag: CapturedImage]()
 
                 for (tagString, base64) in imagesDict {
-                    guard let data = Data(base64Encoded: base64),
-                          let image = NSImage(data: data),
-                          let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
-                    else { continue }
-
-                    guard let tag = MenuBarItemTag(persistenceKey: tagString) else { continue }
+                    guard let data = Data(base64Encoded: base64), let image = NSImage(data: data), let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil), let tag = MenuBarItemTag(persistenceKey: tagString) else { continue }
 
                     let captured = CapturedImage(cgImage: cgImage, scale: image.size.width > 0 ? CGFloat(cgImage.width) / image.size.width : 1.0)
                     loadedImages[tag] = captured
