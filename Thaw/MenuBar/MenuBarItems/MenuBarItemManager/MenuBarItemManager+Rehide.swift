@@ -64,6 +64,10 @@ extension MenuBarItemManager {
 
             var opened = [MenuBarSection]()
             var changedGeometry = false
+            var hoverToken: UUID?
+            @MainActor func protectHover() {
+                if hoverToken == nil { hoverToken = appState.hidEventManager.returnHoverGate.begin(on: displayID) }
+            }
             @MainActor func restore() {
                 guard !opened.isEmpty else { return }
                 for section in opened.reversed() {
@@ -73,6 +77,7 @@ extension MenuBarItemManager {
             }
             defer {
                 restore()
+                if let hoverToken { appState.hidEventManager.returnHoverGate.finish(on: displayID, token: hoverToken) }
                 if changedGeometry {
                     self.lastMoveOperationTimestamp = .now
                     self.isRevealingForRehide = false
@@ -108,6 +113,8 @@ extension MenuBarItemManager {
                 guard sections.count == names.count, sections.allSatisfy(\.isEnabled) else { return }
                 opened = sections.filter { $0.controlItem.state == .hideSection }
                 guard !opened.isEmpty else { return }
+                protectHover()
+                Self.diagLog.info("Temporarily revealing the native divider for return on display \(displayID)")
                 context.didRevealForRehide = true
                 changedGeometry = true
                 self.isRevealingForRehide = true
@@ -126,6 +133,7 @@ extension MenuBarItemManager {
                 } while target == nil && ContinuousClock.now < deadline
             }
             guard let target, safeToContinue() else { return }
+            protectHover()
             let acceptsReturn = self.returnEndpointCheck(for: context.originalSection, destination: target, on: displayID)
             try await self.move(
                 item: item,

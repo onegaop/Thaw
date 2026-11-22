@@ -30,6 +30,7 @@ the items under New and Fixed.
 
 ### Fixed
 
+- Returning an icon no longer treats the resulting cursor or menu-bar movement as a request to open the Thaw Bar on hover.
 - Temporarily shown icons no longer wait through the unidentified-menu timeout after a tracked menu window is destroyed and no replacement appears.
 - The Thaw Bar shows available menu bar images as soon as it opens. Missing images reserve their space while they load, and a slow return of a temporarily shown item no longer holds up the first row.
 - Dragging one item beside an offscreen neighbor in the Layout editor briefly reveals its section and verifies the requested position after the divider is restored. To drag a group to an offscreen neighbor, expand the section first.

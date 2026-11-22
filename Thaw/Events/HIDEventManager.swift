@@ -61,6 +61,8 @@ final class HIDEventManager {
     /// valid and attempts to recreate it if the Mach port was invalidated.
     private var healthCheckTimer: Timer?
 
+    @ObservationIgnored var returnHoverGate = ReturnHoverGate()
+
     /// The currently pending show-on-hover delay task.
     private var hoverTask: Task<Void, any Error>?
 
@@ -1340,6 +1342,12 @@ extension HIDEventManager {
             return
         }
 
+        let displayID = screen.displayID
+        guard returnHoverGate.permitsHover(on: displayID, movedSince: {
+            MouseHelpers.lastMovementOccurred(within: $0.duration(to: .now), stateID: .hidSystemState)
+        }) else { return }
+        let generation = returnHoverGate.generation(on: displayID)
+
         let delay = appState.settings.advanced.showOnHoverDelay
 
         if hiddenSection.isHidden {
@@ -1379,6 +1387,7 @@ extension HIDEventManager {
                 // Make sure the manager is still enabled and the mouse is still inside.
                 guard
                     isEnabled,
+                    returnHoverGate.permitsDelivery(on: displayID, generation: generation),
                     isMouseInsideEmptyMenuBarSpace(
                         appState: appState,
                         screen: screen
@@ -1386,6 +1395,7 @@ extension HIDEventManager {
                 else {
                     return
                 }
+                Self.diagLog.info("Showing the hidden section by hover on display \(displayID)")
                 hiddenSection.show()
             }
         } else {
@@ -1430,6 +1440,7 @@ extension HIDEventManager {
                 try await Task.sleep(for: .seconds(hideDelay))
                 guard
                     isEnabled,
+                    returnHoverGate.permitsDelivery(on: displayID, generation: generation),
                     !isMouseInsideMenuBar(appState: appState, screen: screen),
                     !isMouseInsideIceBar(appState: appState)
                 else {
