@@ -78,24 +78,24 @@ extension MenuBarItemManager {
         /// How long to assume "showing" without a detected popup.
         private let graceInterval: TimeInterval = 2
 
-        /// What is known about the item's interface.
-        enum InterfaceState {
-            /// A window belonging to the item was observed on screen.
-            case showing
+        typealias InterfaceState = TrackedInterfaceClosure.State
 
-            /// The interface was identified and is no longer on screen, so it
-            /// has been closed or dismissed. Positive evidence.
-            case absent
-
-            /// The interface was never identified. Unlike absent this is
-            /// ignorance, so rehiding on it can close an open menu (#924).
-            case unknown
-        }
+        var closureProbe: TrackedInterfaceClosure?
 
         /// What is currently known about the item's interface.
         var interfaceState: InterfaceState {
             // The tracked popup window is the most reliable signal.
-            if let window = shownInterfaceWindow, let current = WindowInfo(windowID: window.windowID) {
+            if let window = shownInterfaceWindow {
+                guard let current = WindowInfo(windowID: window.windowID), current.ownerPID == window.ownerPID else {
+                    return closureProbe?.readAfterLoss(
+                        of: window,
+                        itemWindowID: shownWindowID,
+                        interfacePIDs: interfacePIDs,
+                        visible: WindowInfo.completeOnScreenSnapshot(),
+                        now: .now
+                    ) ?? .unknown
+                }
+                closureProbe?.reset()
                 if current.layer == CGWindowLevelForKey(.popUpMenuWindow)
                     || current.layer == CGWindowLevelForKey(.popUpMenuWindow) - 1
                     || current.layer == CGWindowLevelForKey(.statusWindow)
@@ -628,6 +628,10 @@ extension MenuBarItemManager {
             among: interfaceCandidates,
             interfacePIDs: context.interfacePIDs
         )
+
+        if context.shownInterfaceWindow != nil {
+            context.closureProbe = TrackedInterfaceClosure(beforeClick: idsBeforeClick)
+        }
 
         return .movedAndClicked
     }

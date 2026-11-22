@@ -164,6 +164,15 @@ nonisolated extension WindowInfo {
         createWindows(from: Bridging.getWindowList(option: option))
     }
 
+    /// Returns nil rather than mistaking a failed or partial observation for closed windows.
+    static func completeOnScreenSnapshot() -> [WindowInfo]? {
+        guard let rows = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [CFDictionary],
+              !rows.isEmpty
+        else { return nil }
+        let windows = rows.compactMap { WindowInfo(dictionary: $0) }
+        return windows.count == rows.count ? windows : nil
+    }
+
     /// Creates a list of windows for the elements in the menu bar
     /// using the given options.
     ///
