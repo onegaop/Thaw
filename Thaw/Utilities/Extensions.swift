@@ -919,6 +919,16 @@ extension NSScreen {
         return result
     }
 
+    /// Move the fallback width to the selected display's CoreGraphics row.
+    static nonisolated func rebaseApplicationMenuFrame(_ frame: CGRect, from source: CGRect, to destination: CGRect) -> CGRect {
+        CGRect(
+            x: destination.minX,
+            y: destination.minY + (frame.minY - source.minY),
+            width: frame.width,
+            height: frame.height
+        )
+    }
+
     /// Performs the actual Accessibility API queries to determine the
     /// application menu frame. Returns the raw frame without notch-capping.
     /// Called only on cache miss.
@@ -936,14 +946,21 @@ extension NSScreen {
                         result = result.union(childFrame)
                     }
                 }
-                if !applicationMenuFrame.isNull, applicationMenuFrame.width > 0 {
-                    // If we got a valid width, assume it starts at the screen's left edge.
-                    return CGRect(x: frame.minX, y: applicationMenuFrame.minY, width: applicationMenuFrame.width, height: applicationMenuFrame.height)
+                if !applicationMenuFrame.isNull,
+                   applicationMenuFrame.width > 0,
+                   abs(applicationMenuFrame.minY - displayBounds.minY) <= 2
+                {
+                    // If we got a valid width, assume it starts at this screen's left edge.
+                    return CGRect(x: displayBounds.minX, y: applicationMenuFrame.minY, width: applicationMenuFrame.width, height: applicationMenuFrame.height)
                 }
             }
             // Fallback: the main screen's raw menu width. Callers apply any notch capping.
             if let mainFrame = mainScreen.getApplicationMenuFrame() {
-                return CGRect(x: frame.minX, y: mainFrame.minY, width: mainFrame.width, height: mainFrame.height)
+                return Self.rebaseApplicationMenuFrame(
+                    mainFrame,
+                    from: CGDisplayBounds(mainScreen.displayID),
+                    to: displayBounds
+                )
             }
             return nil
         }

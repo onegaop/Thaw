@@ -22,6 +22,7 @@ $(SRCROOT)/Shared/Utilities/WindowInfo.swift
 $(SRCROOT)/Thaw/Events/EventMonitor.swift
 $(SRCROOT)/Thaw/Events/EventTap.swift
 $(SRCROOT)/Thaw/Events/HIDEventManager.swift
+$(SRCROOT)/Thaw/Events/MenuBarHoverHitPolicy.swift
 $(SRCROOT)/Thaw/Events/ReturnHoverGate.swift
 $(SRCROOT)/Thaw/Events/RunLoopLocalEventMonitor.swift
 $(SRCROOT)/Thaw/Hotkeys/Hotkey.swift

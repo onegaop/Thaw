@@ -30,6 +30,7 @@ the items under New and Fixed.
 
 ### Fixed
 
+- Hover now checks for occupied menu bar spots on the display under the pointer.
 - Returning an icon no longer treats the resulting cursor or menu-bar movement as a request to open the Thaw Bar on hover.
 - Temporarily shown icons no longer wait through the unidentified-menu timeout after a tracked menu window is destroyed and no replacement appears.
 - The Thaw Bar shows available menu bar images as soon as it opens. Missing images reserve their space while they load, and a slow return of a temporarily shown item no longer holds up the first row.

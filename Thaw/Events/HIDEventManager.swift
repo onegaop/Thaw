@@ -1131,15 +1131,15 @@ extension HIDEventManager {
     /// bar widget (e.g. a notch overlay), via the system-wide AX hit-test.
     /// Excludes Thaw, the Window Server, and menu-bar/menu/menu-item roles.
     private func isCursorOverForeignWidgetUIElement() -> Bool {
-        guard let mouseLocation = MouseHelpers.locationCoreGraphics else {
-            return false
-        }
-        guard let element = AXHelpers.element(at: mouseLocation) else {
-            return false
-        }
-        guard let pid = AXHelpers.pid(for: element), pid > 0 else {
-            return false
-        }
+        guard let mouseLocation = MouseHelpers.locationCoreGraphics,
+              let element = AXHelpers.element(at: mouseLocation)
+        else { return false }
+        return isForeignWidgetUIElement(element) ?? false
+    }
+
+    /// A missing AX owner leaves the point unverified.
+    private func isForeignWidgetUIElement(_ element: UIElement) -> Bool? {
+        guard let pid = AXHelpers.pid(for: element), pid > 0 else { return nil }
         if pid == getpid() {
             return false
         }
@@ -1351,13 +1351,7 @@ extension HIDEventManager {
         let delay = appState.settings.advanced.showOnHoverDelay
 
         if hiddenSection.isHidden {
-            guard
-                isMouseInsideEmptyMenuBarSpace(
-                    appState: appState,
-                    screen: screen
-                ),
-                !isCursorOverForeignWidgetUIElement()
-            else {
+            guard hoverHitEvidence(on: screen)?.isEmpty == true else {
                 if pendingHoverAction == .show {
                     hoverTask?.cancel()
                     hoverTask = nil
@@ -1384,17 +1378,23 @@ extension HIDEventManager {
                     }
                 }
                 try await Task.sleep(for: .seconds(delay))
-                // Make sure the manager is still enabled and the mouse is still inside.
-                guard
-                    isEnabled,
-                    returnHoverGate.permitsDelivery(on: displayID, generation: generation),
-                    isMouseInsideEmptyMenuBarSpace(
-                        appState: appState,
-                        screen: screen
-                    )
-                else {
-                    return
-                }
+                guard let currentScreen = NSScreen.screenWithMouse,
+                      MenuBarHoverHitPolicy.mayCommit(
+                          scheduledDisplay: displayID,
+                          currentDisplay: currentScreen.displayID,
+                          isCurrentTask: !Task.isCancelled && hoverTaskToken == taskToken,
+                          stillEnabled: isEnabled && appState.settings.general.showOnHover && appState.menuBarManager.showOnHoverAllowed
+                      ),
+                      returnHoverGate.permitsDelivery(on: displayID, generation: generation),
+                      hiddenSection.isHidden,
+                      let evidence = hoverHitEvidence(on: currentScreen, requireStablePointer: true)
+                else { return }
+                let activeDisplay = Bridging.getActiveMenuBarDisplayID()
+                let spaceMatches = Bridging.getCurrentSpaceID(for: displayID) == Bridging.getActiveSpaceID()
+                Self.diagLog.debug(
+                    "Hover decision display=\(displayID); onActiveDisplay=\(activeDisplay == displayID); activeSpaceMatches=\(spaceMatches); status=\(evidence.status.rawValue); appMenu=\(evidence.appMenu.rawValue); point=\(evidence.point.rawValue); show=\(evidence.isEmpty)"
+                )
+                guard evidence.isEmpty else { return }
                 Self.diagLog.info("Showing the hidden section by hover on display \(displayID)")
                 hiddenSection.show()
             }
@@ -1747,6 +1747,60 @@ extension HIDEventManager {
         return frameOfNotch.contains(mouseLocation)
     }
 
+    /// Uses one CoreGraphics point for the physical screen's actual native row.
+    private func hoverHitEvidence(on screen: NSScreen, requireStablePointer: Bool = false) -> MenuBarHoverHitPolicy.Evidence? {
+        guard let mouse = MouseHelpers.locationCoreGraphics, let strip = menuBarStrip(for: screen), strip.contains(mouse)
+        else { return nil }
+        let notch = screen.frameOfNotch
+        if let notch {
+            let notchTop = strip.minY + screen.frame.maxY - notch.maxY
+            let notchBounds = CGRect(x: notch.minX, y: notchTop, width: notch.width, height: notch.height + 1)
+            guard !notchBounds.contains(mouse) else { return nil }
+        }
+
+        // Active Space is global and may refer to a different physical display
+        // than the mouse. First require actual on-screen membership, then use
+        // the real CoreGraphics bounds to scope the scan to this top strip.
+        let windows = Bridging.getMenuBarWindowList(option: [.onScreen, .itemsOnly])
+            .lazy.compactMap { Bridging.getWindowBounds(for: $0) }
+        let native = MenuBarHoverHitPolicy.statusRegion(
+            at: mouse, in: strip, windowBounds: windows, maxItemWidth: Self.maxReasonableItemWidth
+        )
+        if native.region == .occupied {
+            return .init(status: .occupied, appMenu: .unknown, point: .unknown)
+        }
+        let menu = applicationMenuAXReading(at: mouse, menuBarStrip: strip)
+        let appMenu = MenuBarHoverHitPolicy.appMenuRegion(
+            at: mouse,
+            in: strip,
+            accessibilityHit: menu.hit,
+            fallbackFrame: menu.hit == nil ? screen.getApplicationMenuFrame() : nil,
+            notchMinX: notch?.minX
+        )
+
+        let point: MenuBarHoverHitPolicy.PointHit
+        if let element = AXHelpers.element(at: mouse) {
+            switch AXHelpers.role(for: element) {
+            case .menuBarItem, .menuItem, .menu:
+                point = MenuBarHoverHitPolicy.concretePointHit(frame: AXHelpers.frame(for: element), at: mouse, in: strip)
+            default:
+                let foreign = isForeignWidgetUIElement(element)
+                point = foreign.map { $0 ? .occupied : .neutral } ?? .unknown
+            }
+        } else {
+            point = MenuBarHoverHitPolicy.missingPointHit(
+                at: mouse,
+                in: strip,
+                actualAppMenuTrailingEdge: menu.trailingEdge,
+                nativeStatusLeadingEdge: native.leadingEdge
+            )
+        }
+        // AX reads can block while the hardware pointer keeps moving.
+        guard !requireStablePointer || (MouseHelpers.locationCoreGraphics == mouse && NSScreen.screenWithMouse?.displayID == screen.displayID)
+        else { return nil }
+        return .init(status: native.region, appMenu: appMenu, point: point)
+    }
+
     /// A Boolean value that indicates whether the mouse pointer is within
     /// the bounds of an empty space in the menu bar.
     func isMouseInsideEmptyMenuBarSpace(appState: AppState, screen: NSScreen)
@@ -1827,6 +1881,10 @@ extension HIDEventManager {
             return false
         }
 
+        return applicationMenuAXReading(at: mouseLocation, menuBarStrip: menuBarStrip(for: screen)).hit
+    }
+
+    private func applicationMenuAXReading(at mouseLocation: CGPoint, menuBarStrip: CGRect?) -> (hit: Bool?, trailingEdge: CGFloat?) {
         // Keep "AX indeterminate" (nil) apart from "no hit" (false).
         guard
             let frontApp = NSWorkspace.shared.menuBarOwningApplication,
@@ -1834,20 +1892,26 @@ extension HIDEventManager {
             let menuBar: UIElement = try? axApp.attribute(.menuBar)
         else {
             // AX is indeterminate - can't determine if we're in app menu.
-            return nil
+            return (nil, nil)
         }
 
         // A frame that fails to read could be the menu under the cursor.
         let children = AXHelpers.children(for: menuBar)
         let childFrames = children.compactMap { AXHelpers.frame(for: $0) }
         guard childFrames.count == children.count else {
-            return nil
+            return (nil, nil)
         }
-        return Self.applicationMenuHitResult(
+        let hit = Self.applicationMenuHitResult(
             childFrames: childFrames,
             mouseLocation: mouseLocation,
-            menuBarStrip: menuBarStrip(for: screen)
+            menuBarStrip: menuBarStrip
         )
+        let trailingEdge: CGFloat? = if let menuBarStrip, childFrames.allSatisfy({ $0.intersects(menuBarStrip) }) {
+            childFrames.map(\.maxX).max()
+        } else {
+            nil
+        }
+        return (hit, trailingEdge)
     }
 
     /// Classifies a click against the menu bar-owning app's AX menu items.
